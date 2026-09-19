@@ -9,7 +9,6 @@ const (
 	ImageBlock    BlockKind = "image"
 )
 
-// ContentBlock 是所有内容块的统一表示，Kind 决定用哪组字段。
 type ContentBlock struct {
 	Kind BlockKind
 

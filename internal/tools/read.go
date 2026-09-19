@@ -29,7 +29,7 @@ func ReadTool(cwd string) *types.Tool {
 				},
 				"offset": map[string]any{
 					"type":        "number",
-					"description": "从第几行开始读（从 1 数起），不填默认为 1",
+					"description": "从第几行开始读（从 1 数起），默认为 1，小于 1 按 1 算",
 				},
 				"limit": map[string]any{
 					"type": "number",
