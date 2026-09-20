@@ -2,11 +2,13 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/reuben/go-harness/internal/types"
@@ -28,13 +30,14 @@ func ReadTool(cwd string) *types.Tool {
 					"description": "要读取的文件路径；相对路径相对于工作目录解析",
 				},
 				"offset": map[string]any{
-					"type":        "number",
-					"description": "从第几行开始读（从 1 数起），默认为 1，小于 1 按 1 算",
+					"type":        "integer",
+					"description": "从第几行开始读，从 1 数起，默认为 1；小于 1 报错",
 				},
 				"limit": map[string]any{
-					"type": "number",
+					"type": "integer",
 					"description": fmt.Sprintf(
-						"最多读多少行，不填默认为 %d，超过 %d 按 %d 处理", maxLines, maxLines, maxLines),
+						"最多读多少行，1 到 %d，默认为 %d；超过 %d 按 %d 算，小于 1 报错",
+						maxLines, maxLines, maxLines, maxLines),
 				},
 			},
 			"required": []string{
@@ -82,9 +85,20 @@ func executeRead(ctx context.Context, cwd string, args map[string]any) (types.To
 
 	br := bufio.NewReaderSize(f, bufioSize)
 
-	// TODO 二进制文件、图片处理
+	if sniffBinary(br) {
+		return textResult(fmt.Sprintf("[%s 看起来是二进制文件，没有当文本读。]", path)), nil
+	}
 
-	text, err := readLines(ctx, br, info.Size(), intArg(args, "offset", 1), intArg(args, "limit", maxLines))
+	offset, err := intArg(args, "offset", 1)
+	if err != nil {
+		return types.ToolResult{}, err
+	}
+	limit, err := intArg(args, "limit", maxLines)
+	if err != nil {
+		return types.ToolResult{}, err
+	}
+
+	text, err := readLines(ctx, br, offset, limit)
 	if err != nil {
 		return types.ToolResult{}, fmt.Errorf("读取 %s 失败：%w", path, err)
 	}
@@ -92,16 +106,15 @@ func executeRead(ctx context.Context, cwd string, args map[string]any) (types.To
 	return textResult(text), nil
 }
 
-func readLines(ctx context.Context, br *bufio.Reader, size int64, offset, limit int) (string, error) {
+func readLines(ctx context.Context, br *bufio.Reader, offset, limit int) (string, error) {
 	if offset < 1 {
-		offset = 1
+		return "", fmt.Errorf("offset 从 1 数起，收到 %d", offset)
 	}
-
-	if offset > int(size) {
-		return "", fmt.Errorf("offset %d 不在文件范围内（文件只有 %d 字节）", offset, size)
+	if limit < 1 {
+		return "", fmt.Errorf("limit 至少是 1，收到 %d", limit)
 	}
-	// limit 越界不报错，直接按上限处理
-	if limit < 1 || limit > maxLines {
+	// limit 超过上限不报错，直接按上限处理
+	if limit > maxLines {
 		limit = maxLines
 	}
 
@@ -115,10 +128,11 @@ func readLines(ctx context.Context, br *bufio.Reader, size int64, offset, limit 
 		}
 	}
 
-	var body []string
+	var lines []string
 	hasMore := false
 	used := 0
-	cutLine := 0 // 被截断的行号，0 表示没有
+	cutLine := 0  // 被截断的行号，0 表示没有
+	cutBytes := 0 // 被截断的那一行实际给了多少字节
 
 	for {
 		line, cut, err := nextLine(ctx, br, maxBytes)
@@ -130,55 +144,64 @@ func readLines(ctx context.Context, br *bufio.Reader, size int64, offset, limit 
 		}
 
 		// 已经读满 limit 行，这一行已经读出来了，下次用 offset 接着读它
-		if len(body) == limit {
+		if len(lines) == limit {
 			hasMore = true
 			break
 		}
 
-		lineBytes := len(line)
+		lineNo := offset + len(lines)
+		prefix := strconv.Itoa(lineNo) + "\t"
+		lineBytes := len(prefix) + len(line)
 		// 换行符始终比行数少 1
-		if len(body) > 0 {
+		if len(lines) > 0 {
 			lineBytes++ // 换行符占 1
 		}
 
 		if cut {
-			// 一行本身就超过 maxBytes，行内被截断掉的部分用 offset 也读不出来，
-			// 所以第一行直接给开头；其它位置的超长行留到下一次读，不在正文中间塞半行。
-			if len(body) > 0 {
+			if len(lines) > 0 {
 				hasMore = true
 				break
 			}
-			body = append(body, line)
-			cutLine = offset
+			lines = append(lines, prefix+line)
+			cutLine = lineNo
+			cutBytes = len(line)
 			break
 		}
 
-		// 字节数抵达 maxBytes，这一行放不下，留给下一次读
-		if used+lineBytes > maxBytes {
+		// 超 50kb
+		if len(lines) > 0 && used+lineBytes > maxBytes {
 			hasMore = true
 			break
 		}
 
 		used += lineBytes
-		body = append(body, line)
+		lines = append(lines, prefix+line)
 	}
 
 	// 跳完 offset - 1 行之后没有内容，视作 offset 超过了文件的总行数
-	if len(body) == 0 && offset > 1 {
+	if len(lines) == 0 && offset > 1 {
 		return "", fmt.Errorf("offset %d 超过了文件的总行数", offset)
 	}
 
 	var sb strings.Builder
-	sb.WriteString(strings.Join(body, "\n"))
+	sb.WriteString(strings.Join(lines, "\n"))
 	switch {
 	case cutLine > 0:
-		fmt.Fprintf(&sb, "\n\n[第 %d 行超过 %d KB 上限，这里只给了它的开头 %d 字节；跳过这一行继续读用 offset=%d。]",
-			cutLine, maxBytes/1024, len(body[len(body)-1]), cutLine+1)
+		fmt.Fprintf(&sb, "\n\n[第 %d 行超过 %d KB 上限，只给了它的开头 %d 字节，剩下的取不到，别再读它；跳过这一行继续读用 offset=%d。]",
+			cutLine, maxBytes/1024, cutBytes, cutLine+1)
 	case hasMore:
 		fmt.Fprintf(&sb, "\n\n[已显示第 %d-%d 行，还有更多。用 offset=%d 接着读。]",
-			offset, offset+len(body)-1, offset+len(body))
+			offset, offset+len(lines)-1, offset+len(lines))
+	default:
+		// 读到文件末尾，总数 = 起始行号 + 已读行数 - 1，不用再扫一遍文件
+		fmt.Fprintf(&sb, "\n\n[已读到文件末尾，共 %d 行]", offset+len(lines)-1)
 	}
 	return sb.String(), nil
+}
+
+func sniffBinary(br *bufio.Reader) bool {
+	head, _ := br.Peek(sniffBytes)
+	return bytes.IndexByte(head, 0) >= 0
 }
 
 func discardLine(ctx context.Context, br *bufio.Reader) error {

@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	maxLines  = 2000
-	maxBytes  = 50 * 1024
-	bufioSize = 64 * 1024
+	maxLines   = 2000
+	maxBytes   = 50 * 1024
+	bufioSize  = 64 * 1024
+	sniffBytes = 8 * 1024
 )
 
 // cutRunes 把字符串截到不超过 maxBytes 字节，且不把一个 utf-8 字符切成两半
@@ -38,30 +39,32 @@ func stringArg(args map[string]any, key string) string {
 	return v
 }
 
-// intArg 取整数参数。模型可能给 number、int，也可能给字符串形式的数字
-// 都接受；拿不到合法数字时返回 fallback
-func intArg(args map[string]any, key string, fallback int) int {
-	switch v := args[key].(type) {
-	case float64:
-		return clampToInt(v)
+// intArg 取整数参数。没传或者传了 null 返回 fallback
+func intArg(args map[string]any, key string, fallback int) (int, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return fallback, nil
+	}
+
+	switch v := raw.(type) {
 	case int:
-		return v
+		return v, nil
+	case float64:
+		if v != math.Trunc(v) {
+			return 0, fmt.Errorf("%s 必须是整数，收到 %v", key, v)
+		}
+		if v > 1<<53 || v < -(1<<53) {
+			return 0, fmt.Errorf("%s 超出可用范围，收到 %v", key, v)
+		}
+		return int(v), nil
 	case string:
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			return n
+			return n, nil
 		}
+		return 0, fmt.Errorf("%s 必须是整数，收到 %q", key, v)
+	default:
+		return 0, fmt.Errorf("%s 必须是整数，收到 %v（类型 %T）", key, raw, raw)
 	}
-	return fallback
-}
-
-func clampToInt(f float64) int {
-	switch {
-	case f > math.MaxInt32:
-		return math.MaxInt32
-	case f < math.MinInt32:
-		return math.MinInt32
-	}
-	return int(f)
 }
 
 // 将模型传的 path 解析为绝对路径
