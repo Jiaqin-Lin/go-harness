@@ -6,7 +6,6 @@ import (
 
 	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/tools"
-	"github.com/reuben/go-harness/internal/tui"
 	"github.com/reuben/go-harness/internal/types"
 )
 
@@ -14,7 +13,7 @@ func Run(ctx context.Context,
 	prompts []*types.Message,
 	conversation *types.Conversation,
 	generateFunc provider.GenerateFunction,
-	emit tui.EventSend,
+	emit types.EventSend,
 ) []*types.Message {
 
 	runConversation := &types.Conversation{
@@ -28,11 +27,12 @@ func Run(ctx context.Context,
 	emit(types.Event{Type: types.TurnStartEvent})
 
 	for {
-		msg := provider.CallLLM(ctx, runConversation, generateFunc, emit)
+		msg := provider.CallLLM(ctx, *runConversation, generateFunc, emit)
+		runConversation.Messages = append(runConversation.Messages, msg)
 		newMessages = append(newMessages, msg)
 
 		if msg.StopReason == types.ErrorStop || msg.StopReason == types.AbortedStop {
-			emit(types.Event{Type: types.TurnEndEvent})
+			emit(types.Event{Type: types.TurnEndEvent, Message: msg})
 			break
 		}
 
@@ -43,7 +43,7 @@ func Run(ctx context.Context,
 			if msg.StopReason == types.LengthStop {
 				toolResultMessages, shouldStop = tools.FailTruncatedToolCalls(toolCalls, emit)
 			} else {
-				toolResultMessages, shouldStop = tools.ExecToolCalls(ctx, conversation, toolCalls, emit)
+				toolResultMessages, shouldStop = tools.ExecToolCalls(ctx, runConversation.Tools, toolCalls, emit)
 			}
 			runConversation.Messages = append(runConversation.Messages, toolResultMessages...)
 			newMessages = append(newMessages, toolResultMessages...)
@@ -55,7 +55,7 @@ func Run(ctx context.Context,
 			ToolResultMessages: toolResultMessages,
 		})
 
-		if len(toolCalls) == 0 || shouldStop {
+		if len(toolCalls) == 0 || shouldStop || ctx.Err() != nil {
 			break
 		}
 

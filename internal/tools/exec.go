@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/reuben/go-harness/internal/tui"
 	"github.com/reuben/go-harness/internal/types"
 )
 
-func FailTruncatedToolCalls(callContentBlocks []types.ContentBlock, emit tui.EventSend) ([]*types.Message, bool) {
+func FailTruncatedToolCalls(callContentBlocks []types.ContentBlock, emit types.EventSend) ([]*types.Message, bool) {
 	var toolResultMessages []*types.Message
 
 	for _, b := range callContentBlocks {
@@ -49,12 +48,12 @@ func FailTruncatedToolCalls(callContentBlocks []types.ContentBlock, emit tui.Eve
 	return toolResultMessages, false
 }
 
-func ExecToolCalls(ctx context.Context, conversation *types.Conversation, callContentBlocks []types.ContentBlock, emit tui.EventSend) ([]*types.Message, bool) {
+func ExecToolCalls(ctx context.Context, toolset []*types.Tool, callContentBlocks []types.ContentBlock, emit types.EventSend) ([]*types.Message, bool) {
 	var toolResultMessages []*types.Message
 	toolResults := make([]types.ToolResult, 0, len(callContentBlocks))
 
 	for _, b := range callContentBlocks {
-		toolResult, isError := execToolCall(ctx, conversation, b, emit)
+		toolResult, isError := execToolCall(ctx, toolset, b, emit)
 		toolResults = append(toolResults, toolResult)
 		msg := toolResultMessage(b, toolResult, isError)
 		emit(types.Event{
@@ -66,19 +65,12 @@ func ExecToolCalls(ctx context.Context, conversation *types.Conversation, callCo
 			Message: msg,
 		})
 		toolResultMessages = append(toolResultMessages, msg)
-
-		if err := ctx.Err(); err != nil {
-			break
-		}
 	}
 
 	return toolResultMessages, resolveShouldStop(toolResults)
 }
 
 func resolveShouldStop(toolResults []types.ToolResult) bool {
-	if len(toolResults) == 0 {
-		return true
-	}
 	for _, r := range toolResults {
 		if !r.ShouldStop {
 			return false
@@ -87,7 +79,7 @@ func resolveShouldStop(toolResults []types.ToolResult) bool {
 	return true
 }
 
-func execToolCall(ctx context.Context, conversation *types.Conversation, callContentBlock types.ContentBlock, emit tui.EventSend) (types.ToolResult, bool) {
+func execToolCall(ctx context.Context, toolset []*types.Tool, callContentBlock types.ContentBlock, emit types.EventSend) (types.ToolResult, bool) {
 	args, err := parseToolCallArgs(callContentBlock.Args)
 	emit(types.Event{
 		Type:       types.ToolStartEvent,
@@ -107,7 +99,7 @@ func execToolCall(ctx context.Context, conversation *types.Conversation, callCon
 			),
 		), true
 	} else {
-		toolResult, isError = runTool(ctx, conversation, callContentBlock, emit, args)
+		toolResult, isError = runTool(ctx, toolset, callContentBlock, emit, args)
 	}
 
 	emit(types.Event{
@@ -116,14 +108,14 @@ func execToolCall(ctx context.Context, conversation *types.Conversation, callCon
 		ToolName:        callContentBlock.ToolName,
 		Args:            args,
 		ToolFinalResult: &toolResult,
-		IsError:         true,
+		IsError:         isError,
 	})
 
 	return toolResult, isError
 }
 
-func runTool(ctx context.Context, conversation *types.Conversation, callContentBlock types.ContentBlock, emit tui.EventSend, args map[string]any) (types.ToolResult, bool) {
-	tool := conversation.Tools[callContentBlock.ToolName]
+func runTool(ctx context.Context, toolset []*types.Tool, callContentBlock types.ContentBlock, emit types.EventSend, args map[string]any) (types.ToolResult, bool) {
+	tool := findTool(toolset, callContentBlock.ToolName)
 	if tool == nil {
 		return errorResult(fmt.Sprintf(
 			"没有叫 %s 的工具",
@@ -164,6 +156,15 @@ func runTool(ctx context.Context, conversation *types.Conversation, callContentB
 	return toolResult, false
 }
 
+func findTool(toolset []*types.Tool, name string) *types.Tool {
+	for _, tool := range toolset {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	return nil
+}
+
 func parseToolCallArgs(raw string) (map[string]any, error) {
 	if raw == "" {
 		return nil, nil
@@ -180,7 +181,6 @@ func errorResult(text string) types.ToolResult {
 }
 
 func toolResultMessage(callContentBlock types.ContentBlock, toolResult types.ToolResult, isError bool) *types.Message {
-	fmt.Println(callContentBlock.ToolCallID)
 	return &types.Message{
 		Role:          types.ToolResultRole,
 		ContentBlocks: toolResult.ContentBlock,

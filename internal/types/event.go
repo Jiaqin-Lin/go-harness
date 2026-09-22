@@ -39,16 +39,16 @@ type AssistantEvent struct {
 	Delta             string // 只有 _delta 后缀用
 }
 
-// agent_start           没有字段
-// turn_start            没有字段
-// agent_end             Messages
-// turn_end              Message、ToolFinalResult
-// message_start         Message
-// message_update        AssistantEvent（消息在它里面）
-// message_end           Message
-// tool_execution_start  ToolCallID、ToolName、Args
-// tool_execution_update ToolCallID、ToolName、Args、ToolPartialResult
-// tool_execution_end    ToolCallID、ToolName、Args、ToolFinalResult、IsError
+// agent_start    没有字段
+// agent_end      Messages
+// turn_start     没有字段
+// turn_end       Message（本轮的 assistant 消息）、ToolResultMessages
+// message_start  Message
+// message_partial AssistantEvent（消息在它里面）
+// message_end    Message
+// tool_start     ToolCallID、ToolName、Args
+// tool_partial   ToolCallID、ToolName、Args、ToolPartialResult
+// tool_end       ToolCallID、ToolName、Args、ToolFinalResult、IsError
 type Event struct {
 	Type               EventType
 	Messages           []*Message
@@ -62,3 +62,6 @@ type Event struct {
 	ToolResultMessages []*Message
 	IsError            bool
 }
+
+// EventSend 把事件交出去。core 和 tools 只管发，谁在收、怎么渲染不归它们管
+type EventSend func(Event)

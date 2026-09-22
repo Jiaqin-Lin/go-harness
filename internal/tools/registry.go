@@ -6,8 +6,8 @@ func textResult(text string) types.ToolResult {
 	return types.ToolResult{ContentBlock: []types.ContentBlock{types.NewTextBlock(text)}}
 }
 
-func GetAllTools(cwd string) map[string]*types.Tool {
-	return map[string]*types.Tool{
-		"read": ReadTool(cwd),
+func GetAllTools(cwd string) []*types.Tool {
+	return []*types.Tool{
+		ReadTool(cwd),
 	}
 }
