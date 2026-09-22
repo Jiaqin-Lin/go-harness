@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -15,6 +16,9 @@ const (
 	maxBytes   = 50 * 1024
 	bufioSize  = 64 * 1024
 	sniffBytes = 8 * 1024
+
+	maxBashTimeout = 2_147_483_647 / 1000
+	waitDelay      = 5 * time.Second
 )
 
 // cutRunes 把字符串截到不超过 maxBytes 字节，且不把一个 utf-8 字符切成两半

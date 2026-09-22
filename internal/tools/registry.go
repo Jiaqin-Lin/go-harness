@@ -9,5 +9,6 @@ func textResult(text string) types.ToolResult {
 func GetAllTools(cwd string) []*types.Tool {
 	return []*types.Tool{
 		ReadTool(cwd),
+		BashTool(cwd),
 	}
 }

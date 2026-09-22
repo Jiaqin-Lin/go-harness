@@ -19,7 +19,9 @@ func ReadTool(cwd string) *types.Tool {
 		Name:    "read",
 		Snippet: "读文件内容",
 		Desc: fmt.Sprintf(
-			"读取一个文件的内容，内容过长时只返回前 %d 行或 %d KB，同时会告诉你从第几行开始继续读。",
+			"读取一个文件的内容。每行输出成「行号 + 制表符 + 内容」，行号从 1 数起。"+
+				"一次最多给 %d 行或 %d KB，撞到哪个上限就在哪停，剩下的用结尾给的 offset 接着读。"+
+				"二进制文件、空文件、目录不给内容，只回一句说明。",
 			maxLines, maxBytes/1024,
 		),
 		Args: map[string]any{
@@ -27,17 +29,17 @@ func ReadTool(cwd string) *types.Tool {
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "要读取的文件路径；相对路径相对于工作目录解析",
+					"description": "要读的文件路径。相对路径按工作目录解析，~ 展开成家目录。",
 				},
 				"offset": map[string]any{
 					"type":        "integer",
-					"description": "从第几行开始读，从 1 数起，默认为 1；小于 1 报错",
+					"description": "从第几行开始读，从 1 数起，默认 1。小于 1、或超过文件总行数都报错。",
 				},
 				"limit": map[string]any{
 					"type": "integer",
 					"description": fmt.Sprintf(
-						"最多读多少行，1 到 %d，默认为 %d；超过 %d 按 %d 算，小于 1 报错",
-						maxLines, maxLines, maxLines, maxLines),
+						"最多读多少行，默认 %d。大于 %d 按 %d 算（不报错），小于 1 报错。",
+						maxLines, maxLines, maxLines),
 				},
 			},
 			"required": []string{
@@ -45,7 +47,8 @@ func ReadTool(cwd string) *types.Tool {
 			},
 		},
 		Guidelines: []string{
-			"看文件用 read，不要用 cat、sed 绕一圈。",
+			"看文件用 read，不要用 cat、head、sed 绕一圈。",
+			"read 结尾说「还有更多」时，用 offset 接着读，不要从头再读一遍。",
 		},
 		Execute: func(ctx context.Context, args map[string]any, _ types.SendPartialResult) (types.ToolResult, error) {
 			return executeRead(ctx, cwd, args)
