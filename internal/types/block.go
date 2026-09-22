@@ -15,9 +15,9 @@ type ContentBlock struct {
 	Text     string // TextBlock
 	Thinking string // ThinkingBlock
 
-	ToolCallID   string         // ToolBlock
-	ToolCallName string         // ToolBlock
-	Args         map[string]any // ToolBlock
+	ToolCallID string // ToolBlock
+	ToolName   string // ToolBlock
+	Args       string // ToolBlock
 
 	ImageMime string // ImageBlock
 	ImageData string // ImageBlock

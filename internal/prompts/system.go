@@ -7,7 +7,7 @@ import (
 	"github.com/reuben/go-harness/internal/types"
 )
 
-func BuildSystemPrompt(cwd string, tools []*types.Tool) string {
+func BuildSystemPrompt(cwd string, tools map[string]*types.Tool) string {
 	var sb strings.Builder
 	sb.WriteString("你是 Nova，一个能读写文件、执行命令的编程助手。\n\n可以用的工：\n")
 	for _, tool := range tools {

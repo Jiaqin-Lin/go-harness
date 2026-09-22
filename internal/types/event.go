@@ -50,14 +50,15 @@ type AssistantEvent struct {
 // tool_execution_update ToolCallID、ToolName、Args、ToolPartialResult
 // tool_execution_end    ToolCallID、ToolName、Args、ToolFinalResult、IsError
 type Event struct {
-	Type              EventType
-	Messages          []*Message
-	Message           *Message
-	AssistantEvent    *AssistantEvent
-	ToolCallID        string
-	ToolName          string
-	Args              map[string]any
-	ToolPartialResult *ToolResult
-	ToolFinalResult   *ToolResult
-	IsError           bool
+	Type               EventType
+	Messages           []*Message
+	Message            *Message
+	AssistantEvent     *AssistantEvent
+	ToolCallID         string
+	ToolName           string
+	Args               map[string]any
+	ToolPartialResult  *ToolResult
+	ToolFinalResult    *ToolResult
+	ToolResultMessages []*Message
+	IsError            bool
 }

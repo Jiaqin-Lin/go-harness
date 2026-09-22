@@ -11,6 +11,7 @@ const (
 type StopReason string
 
 const (
+	PendingStop  StopReason = "pending"
 	NormalStop   StopReason = "normal"
 	LengthStop   StopReason = "length"
 	ToolUserStop StopReason = "tool_use"
@@ -44,4 +45,14 @@ type Message struct {
 	ToolCallID string
 	ToolName   string
 	IsError    bool
+}
+
+func (m *Message) ToolCalls() []ContentBlock {
+	var toolCalls []ContentBlock
+	for _, b := range m.ContentBlocks {
+		if b.Kind == ToolBlock {
+			toolCalls = append(toolCalls, b)
+		}
+	}
+	return toolCalls
 }

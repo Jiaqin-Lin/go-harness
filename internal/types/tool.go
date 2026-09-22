@@ -24,6 +24,5 @@ type Tool struct {
 
 type ToolResult struct {
 	ContentBlock []ContentBlock
-	ShouldStop   bool // 所有工具返回的该字段都为 true 时，loop 才停下
-	IsError      bool // 工具执行失败。带上它照样要作为 tool_result 回给模型，不是终止循环的信号
+	ShouldStop   bool // 所有工具返回的该字段都为 true 时，停止调用工具；也可后续留给 hook 使用
 }

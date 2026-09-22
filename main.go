@@ -9,6 +9,7 @@ import (
 
 	"github.com/reuben/go-harness/internal/core"
 	"github.com/reuben/go-harness/internal/prompts"
+	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/tools"
 	"github.com/reuben/go-harness/internal/tui"
 	"github.com/reuben/go-harness/internal/types"
@@ -37,8 +38,8 @@ func main() {
 			Role:          types.UserRole,
 			ContentBlocks: []types.ContentBlock{types.NewTextBlock(text)},
 		}
-		conversation.Message = append(conversation.Message,
-			core.Run(ctx, []*types.Message{prompt}, conversation)...)
+		conversation.Messages = append(conversation.Messages,
+			core.Run(ctx, []*types.Message{prompt}, conversation, provider.GenerateFunc, tui.Emit)...)
 	}
 
 	if _, err := tea.NewProgram(tui.NewModel(send)).Run(); err != nil {
