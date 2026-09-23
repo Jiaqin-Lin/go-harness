@@ -10,5 +10,6 @@ func GetAllTools(cwd string) []*types.Tool {
 	return []*types.Tool{
 		ReadTool(cwd),
 		BashTool(cwd),
+		WriteTool(cwd),
 	}
 }

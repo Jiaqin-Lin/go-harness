@@ -43,6 +43,19 @@ func stringArg(args map[string]any, key string) string {
 	return v
 }
 
+// stringArgStrict 取字符串参数。没传、传 null、类型不对都报错，空串是合法值
+func stringArgStrict(args map[string]any, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return "", fmt.Errorf("缺少 %s 参数", key)
+	}
+	v, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s 必须是字符串，收到 %v（类型 %T）", key, raw, raw)
+	}
+	return v, nil
+}
+
 // intArg 取整数参数。没传或者传了 null 返回 fallback
 func intArg(args map[string]any, key string, fallback int) (int, error) {
 	raw, ok := args[key]
