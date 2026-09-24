@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/joho/godotenv"
 
 	"github.com/reuben/go-harness/internal/core"
 	"github.com/reuben/go-harness/internal/prompts"
@@ -18,7 +20,18 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// TODO 模型接入
+	// 没有 .env 也能跑，那样就全都从环境变量里来
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "读 .env 失败：%v\n", err)
+		os.Exit(1)
+	}
+
+	apiKey, baseURL, model := os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("DEEPSEEK_MODEL")
+	if apiKey == "" || baseURL == "" || model == "" {
+		fmt.Fprintln(os.Stderr, "DEEPSEEK_API_KEY、DEEPSEEK_BASE_URL、DEEPSEEK_MODEL 要在 .env 或环境变量里给全")
+		os.Exit(1)
+	}
+	llm := provider.NewDeepSeek(apiKey, baseURL, model)
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -39,7 +52,7 @@ func main() {
 			ContentBlocks: []types.ContentBlock{types.NewTextBlock(text)},
 		}
 		conversation.Messages = append(conversation.Messages,
-			core.Run(ctx, []*types.Message{prompt}, conversation, provider.GenerateFunc, tui.Emit)...)
+			core.Run(ctx, []*types.Message{prompt}, conversation, llm.Generate, tui.Emit)...)
 	}
 
 	if _, err := tea.NewProgram(tui.NewModel(send)).Run(); err != nil {
