@@ -19,7 +19,9 @@ func ReadTool(cwd string) *types.Tool {
 		Name:    "read",
 		Snippet: "读文件内容",
 		Desc: fmt.Sprintf(
-			"读取一个文件的内容。每行输出成「行号 + 制表符 + 内容」，行号从 1 数起。"+
+			"读取一个文件的内容。图片（png / jpeg / gif / webp / bmp）连图片本身一起返回，"+
+				"offset 和 limit 对图片不起作用。"+
+				"文本文件每行输出成「行号 + 制表符 + 内容」，行号从 1 数起；"+
 				"一次最多给 %d 行或 %d KB，撞到哪个上限就在哪停，剩下的用结尾给的 offset 接着读。"+
 				"二进制文件、空文件、目录不给内容，只回一句说明。",
 			maxLines, maxBytes/1024,
@@ -49,6 +51,7 @@ func ReadTool(cwd string) *types.Tool {
 		Guidelines: []string{
 			"看文件用 read，不要用 cat、head、sed 绕一圈。",
 			"read 结尾说「还有更多」时，用 offset 接着读，不要从头再读一遍。",
+			"图片直接 read，它会把图片本身交给你；不要用 bash 去 base64、转码或调别的工具绕。",
 		},
 		Execute: func(ctx context.Context, args map[string]any, _ types.SendPartialResult) (types.ToolResult, error) {
 			return executeRead(ctx, cwd, args)
@@ -87,6 +90,12 @@ func executeRead(ctx context.Context, cwd string, args map[string]any) (types.To
 	}
 
 	br := bufio.NewReaderSize(f, bufioSize)
+
+	// 图片要排在文本那一套前面认：图片里带 NUL 字节，二进制嗅探会把它当二进制掐掉
+	head, _ := br.Peek(sniffBytes)
+	if mime := imageMime(head); mime != "" {
+		return readImage(br, path, mime)
+	}
 
 	if sniffBinary(br) {
 		return textResult(fmt.Sprintf("[%s 看起来是二进制文件，没有当文本读。]", path)), nil

@@ -24,14 +24,27 @@ type streamOptions struct {
 }
 
 type wireMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role string `json:"role"`
+
+	// 纯文本时是 string，带图片时是 []wireContentPart。assistant 永远是 string，
+	// 见 assistantMessage 里的原因
+	Content any `json:"content"`
 
 	// thinking 模式下必须原样回传，少一次就 400，见 wireMessageFrom 的注释
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 
 	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+type wireContentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *wireImageURL `json:"image_url,omitempty"`
+}
+
+type wireImageURL struct {
+	URL string `json:"url"`
 }
 
 type wireToolCall struct {
@@ -85,7 +98,7 @@ func wireMessageFrom(msg *types.Message) wireMessage {
 	case types.ToolResultRole:
 		return wireMessage{
 			Role:       "tool",
-			Content:    textOf(msg.ContentBlocks),
+			Content:    contentOf(msg.ContentBlocks),
 			ToolCallID: msg.ToolCallID,
 		}
 
@@ -93,8 +106,41 @@ func wireMessageFrom(msg *types.Message) wireMessage {
 		return assistantMessage(msg)
 
 	default:
-		return wireMessage{Role: string(msg.Role), Content: textOf(msg.ContentBlocks)}
+		return wireMessage{Role: string(msg.Role), Content: contentOf(msg.ContentBlocks)}
 	}
+}
+
+// contentOf 摊平一条消息的内容。没有图片就给字符串——OpenAI 兼容接口对 content
+// 数组的支持参差（pi 撞到过模型把数组结构原样抄进输出），纯文本没必要冒这个险。
+// 有图片就必须用数组，图片只能以 content part 的形式随消息发出去
+func contentOf(blocks []types.ContentBlock) any {
+	hasImage := false
+	for _, block := range blocks {
+		if block.Kind == types.ImageBlock {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return textOf(blocks)
+	}
+
+	parts := make([]wireContentPart, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Kind {
+		case types.TextBlock:
+			if block.Text == "" {
+				continue
+			}
+			parts = append(parts, wireContentPart{Type: "text", Text: block.Text})
+		case types.ImageBlock:
+			parts = append(parts, wireContentPart{
+				Type:     "image_url",
+				ImageURL: &wireImageURL{URL: "data:" + block.ImageMime + ";base64," + block.ImageData},
+			})
+		}
+	}
+	return parts
 }
 
 func assistantMessage(msg *types.Message) wireMessage {
@@ -117,6 +163,8 @@ func assistantMessage(msg *types.Message) wireMessage {
 		}
 	}
 
+	// assistant 的 content 永远是字符串。助手消息本来就不带图片，而数组形式有些
+	// OpenAI 兼容实现会把结构原样抄进回复里
 	wire.Content = strings.Join(text, "")
 	// 上一轮模型的推理内容要跟着这一轮回传。服务端只在缓存里留着按 tool_call id 索引的
 	// 推理内容，缓存没了就会因为「thinking 模式的 reasoning_content 没回传」直接 400，

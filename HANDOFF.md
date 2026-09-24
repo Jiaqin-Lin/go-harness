@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**TUI 渲染还是空函数**，所以 `go run .` 交互式看不到任何输出；图片支持已调研完并验证了方案，尚未实现。
+DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持已做完并实测**（read 能读图、wire 能把图送出去）。**产品方向改成 web 版，TUI 不做了**（2026-09-24 定），所以 `main.go` 那套 bubbletea 是过渡产物，`tui.Emit` 仍是空函数。
 
 ---
 
@@ -13,12 +13,14 @@ DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**TUI 渲染�
 | 部分 | 状态 |
 |---|---|
 | `provider`（DeepSeek 流式接入） | ✅ 能用，实测跑通 |
-| `tools`（read / bash / write / edit） | ✅ 能用，有测试 |
+| `tools`（read / bash / write / edit） | ✅ 能用，有测试；read 现在也能读图 |
 | `core`（loop） | ✅ 能用 |
-| **`tui`（渲染）** | ❌ **`tui.Emit` 是空函数**（`internal/tui/event.go:5`），事件发出去没人收 |
-| **图片** | ❌ 未实现，且 `wire.go` 会**静默丢掉**图片块 |
+| **图片** | ✅ 已实现并实测：read 读图（png/jpeg/gif/webp/bmp，超限自动缩放）、wire 带图（tool 消息和 user 消息都带得动）。**实测跑的是 png，webp/bmp 的 API 接受度没测** |
+| **`tui`（渲染）** | ❌ 不做了，改 web 版。`tui.Emit` 仍是空函数（`internal/tui/event.go:5`） |
 
 **验证方式**：`main.go` 走的是 bubbletea TUI，需要真 TTY，没法脚本化驱动。当时是临时写了个命令行驱动（`cmd/demo`，跑完已删）直接调 `core.Run`，在 `/tmp/java-crud` 让模型写了个 Java CRUD：**5 轮、7 次工具调用、0 错误**，产物我自己重新 `javac` + `java` 复验过。
+
+图片验证同一个路子：临时驱动直接调 `core.Run`，让模型 read 一张四色块图（颜色顺序故意反着排），报对了。**测的时候必须把 bash 工具摘掉**，不然模型会自己解码 PNG 对像素——那样测出来的是它会写脚本，不是它看得见（第一轮就是这么被骗过去的）。
 
 ---
 
@@ -78,6 +80,16 @@ osascript -e 'set f to (open for access POSIX file "/tmp/clip1.png" with write p
           -e 'close access f'
 ```
 
+### 7. 图片已实装（2026-09-24）
+
+- 依赖 `golang.org/x/image v0.46.0`：缩放用 `draw.CatmullRom`，另外借了 bmp / webp 的解码器（顺带升了 x/sys、x/text）
+- 上限照抄 pi：2000x2000、base64 ≤ 4.5MB、PNG 优先再 JPEG `80/70/55/40` 逐级降质、还超就按 0.75 缩尺寸
+- 代码在 `internal/tools/image.go`；`read` 命中图片就返回 `[文本说明, 图片块]`，不走行数/字节预算
+- **只有 BMP 的魔数弱**（`BM` 两个字母，以「BMW」开头的文本文件会被骗），所以保留了 pi 的 `isBmp` 头部校验。png/jpeg/gif/webp 的魔数够长够怪，没做额外校验
+- 没用 pi 那套「把图片从 tool 消息提到后续 user 消息」的绕道，tool 消息直接带 content parts，实测能过
+- **还没实测的**：webp/bmp 原样透传时 DeepSeek 收不收（png/jpeg/gif 实测没问题）；换成 `deepseek-v4-pro`（不支持图片输入）时会怎么报错
+- wire 里 assistant 的 `content` 永远保持字符串，只有 tool / user 消息带图时才换成 content parts 数组
+
 ---
 
 ## 三、文件地图
@@ -89,7 +101,9 @@ internal/provider/
   wire.go        (173行)       harness 消息模型 <-> OpenAI 协议转换
   generate.go    ( 75行)       CallLLM：把增量事件折回一条 types.Message
 internal/core/loop.go           agent loop
-internal/tools/                 read / bash / write / edit + registry
+internal/tools/
+  read.go / bash.go / write.go / edit.go / exec.go / registry.go
+  image.go                    图片嗅探 + 解码 + 缩放重编码（read 读图走这儿）
 internal/types/                 全部类型定义（见第五节）
 internal/tui/                   ⚠️ event.go 的 Emit 是空的
 ```
@@ -101,22 +115,18 @@ internal/tui/                   ⚠️ event.go 的 Emit 是空的
 
 ## 四、已知问题 / 待办
 
-### 待办 A：图片支持（调研完成，可直接动手）
+### 待办 A：图片支持 ✅ 已完成（2026-09-24）
 
-1. **`read` 工具支持读图** —— 这是整条链的落点
-   - 识别图片 → 解码 → 缩放 → 返回 `[文本说明块, 图片块]`
-   - 参考 pi：`packages/coding-agent/src/core/tools/read.ts`
-2. **`wire.go` 补图片** —— `ImageBlock` → `{"type":"image_url","image_url":{"url":"data:<mime>;base64,..."}}`
-   - tool 消息的 `content` 要从 string 改成 content parts 数组
-   - **注意：现在这里会静默丢图，不报错也不提示**
-3. **TUI 粘贴**（可延后到做 TUI 时）—— Ctrl+V → `osascript` 读剪贴板 → 存临时文件 → 把**路径**插进输入框
-4. **provider 发一次 `AssistantStartEvent`**
+1. `read` 工具读图 ✅ 见 `internal/tools/image.go`
+2. `wire.go` 补图片 ✅ tool / user 消息带图时 `content` 换成 content parts 数组（1、2 都有测试：`read_test.go` 的 `TestReadImage*`、`wire_test.go`）
+3. TUI 粘贴 ❌ 随 TUI 一起没了 —— 改成 web 版后，粘贴在浏览器里是原生的，不用 `osascript` 那套
+4. provider 发 `AssistantStartEvent` ✅ 发在 `deepseek.go` 流建立之后（HTTP 200 拿到、开始读 SSE 之前），有单测
 
-**缩放方案（需拍板）**：Go 标准库能解码 png/jpeg/gif，但**没有任何缩放函数**。
-- 推荐 (a)：引 `golang.org/x/image`（有 `CatmullRom`/`BiLinear` 采样器，已验证可拉到 v0.46.0），对齐 pi 的策略：max 2000x2000、base64 ≤ 4.5MB、JPEG 质量 80
-- (b)：不缩放，只设大小上限，超了报错 — 0 依赖但粘贴 4K 截图体验差
+**缩放方案拍板结果**：引 `golang.org/x/image`（对齐 pi）。另一条「不缩放只报错」的路没走 —— 4K 截图会直接读不了。
 
-### 待办 B：`SendPartialResult` 给 bash 用（做 TUI 时一起）
+### 待办 B：`SendPartialResult` 给 bash 用（用户拍板：先跳过）
+
+**等 web 版做实时输出时一起做**。现在没有任何消费者，事件发出来也看不见。
 
 用户已确认方向：bash 是唯一合理的消费者（`read`/`write`/`edit` 都没中间结果）。
 
@@ -126,11 +136,11 @@ internal/tui/                   ⚠️ event.go 的 Emit 是空的
 
 `exec.go:134` 的 `settled` 守卫是对的，不用动。
 
-### 待办 C：TUI 渲染
+### 待办 C：渲染（原 TUI，现改 web）
 
-`tui.Emit` 要接上，把 `types.Event` 渲染出来。用户明确说**不急**，但要求"确保后续有机会消费"—— 目前所有会被 TUI 消费的字段都已填好，不用提前做任何事。
+TUI 不做了，`main.go` 那套 bubbletea 是过渡产物。事件流的消费端将来是 web：`types.Event` 里该填的字段都已填好，这边不用再动，照着渲染就行。
 
-唯一要留意：**图片块要有降级渲染**（显示成 `[图片 800x600 png 45KB]` 占位），否则 `View()` 会当空块跳过。
+唯一要留意：**图片块要有降级渲染**（显示成 `[图片 800x600 png 45KB]` 占位），别把 `ImageBlock` 当空块跳过。
 
 ---
 
@@ -152,10 +162,10 @@ internal/tui/                   ⚠️ event.go 的 Emit 是空的
 
 | 符号 | 未来用途 |
 |---|---|
-| `ImageBlock`/`ImageMime`/`ImageData` | 待办 A，马上要用 |
-| `SendPartialResult` / `ToolPartialEvent` / `Event.ToolPartialResult` | 待办 B，给 bash |
+| `ImageBlock`/`ImageMime`/`ImageData` | ✅ 已用：read 返回图片块，wire 把图片发出去 |
+| `SendPartialResult` / `ToolPartialEvent` / `Event.ToolPartialResult` | 待办 B，给 bash（先跳过，等 web 版） |
 | `ToolResult.ShouldStop` | **用户明确要求保留**，以后给 hook 用 |
-| `AssistantStartEvent` | 语义不重合：区分"请求已发出"(`MessageStartEvent`) 和"流已建立"（本事件）。**要么发要么删，别挂着当死代码** |
+| `AssistantStartEvent` | ✅ 已发，见下面 ④ |
 
 ### ③ 可删清单（写于 2026-09-24，确认没写入方、也没读取方）
 
@@ -167,11 +177,9 @@ internal/tui/                   ⚠️ event.go 的 Emit 是空的
 | `Message.ToolName` | `types/message.go:46` | 在 **tool_result 消息**上只写不读（写入点 `tools/exec.go:188`）。它存在是为了"某些厂商要求 tool 消息带 name"（pi 里对应 `requiresToolResultName` 兼容开关），**DeepSeek 不需要**，`wire.go:86` 发 tool 消息时只用了 `ToolCallID` | 无。注意别跟 `ContentBlock.ToolName` 搞混 —— 那个是必需的，用来构造 `tool_calls[].function.name` |
 | `Message.IsError` | `types/message.go:47` | OpenAI 协议里 tool 消息**没有** is_error 字段，错误只能靠文本传达，所以 wire 上永不使用。本地只有测试在读（`exec_test.go:39,88`） | 若以后要**渲染持久化的对话历史**（而非实时事件流），或要接 Anthropic（它有 `is_error`），会需要它。只接 DeepSeek + 只做实时渲染的话不需要 |
 
-### ④ 待决策：要么用要么删
+### ④ 待决策：要么用要么删 —— 已定：留，并且发
 
-| 符号 | 情况 |
-|---|---|
-| `AssistantStartEvent` | `types/event.go:25`。provider **从来没发过**它，所以现在是死代码。但它跟 `MessageStartEvent` 语义**不重合**：后者在 HTTP 请求发出**之前**就发了，前者表示"流已建立"。DeepSeek 是推理模型，首 token 常要等几秒，UI 区分"正在连模型"vs"模型正在生成"是有意义的。**建议 provider 在流建立后发一次（1 行），否则就该删掉**，别继续挂着 |
+`AssistantStartEvent`（`types/event.go:25`）现在在 `deepseek.go` 里，**流建立之后**发一次（HTTP 200 拿到、开始读 SSE 之前）。它跟 `MessageStartEvent` 语义**不重合**：后者在 HTTP 请求发出**之前**就发了，前者表示"流已建立"。DeepSeek 是推理模型，首 token 常要等几秒，UI 区分"正在连模型"vs"模型正在生成"是有意义的。有单测 `provider/deepseek_test.go`。
 
 ### ⑤ 看着像死代码、但**不能删**的
 
@@ -186,7 +194,8 @@ internal/tui/                   ⚠️ event.go 的 Emit 是空的
 
 ## 六、踩过的其他坑（避免重踩）
 
-- **pi 的 `read` 工具返回 `[文本说明, 图片块]`**，并对不支持视觉的模型有兜底（省略图片 + 加一句说明）
+- **测读图必须把 bash 工具摘掉** —— 不摘的话模型会自己 `bash` 跑脚本解码 PNG 对像素，答案是对的，但证明不了它看得见（详见第一节的验证方式）
+- **pi 的 `read` 工具返回 `[文本说明, 图片块]`**，并对不支持视觉的模型有兜底（省略图片 + 加一句说明）。这个兜底**没做**：只接 DeepSeek 一家，配的又是支持图片的 flash，等真换了不支持视觉的模型再说
 - **不要用伪造的 tool_call id 测多轮** —— 会误报成 `reasoning_content` 错误，浪费一轮排查（详见第二节第 1 条）
 - `usage` 只有在 `stream_options.include_usage=true` 时才在流末尾单独给一帧
 - 流式分片里 `reasoning_content` 会先于 `content` 到达，且首帧可能是空串 `""`

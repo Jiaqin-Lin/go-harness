@@ -80,6 +80,10 @@ func (d *DeepSeek) stream(ctx context.Context, conversation types.Conversation, 
 		return fmt.Errorf("模型返回 %d：%s", resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
 
+	// 到这儿流才算建立。MessageStartEvent 在这之前就发了，说的是「请求已发出」；
+	// 这个事件说的是「模型开始回了」。推理模型首 token 要等好几秒，UI 要分得开这两段
+	emit(types.AssistantEvent{Type: types.AssistantStartEvent})
+
 	return d.readStream(resp.Body, emit)
 }
 
