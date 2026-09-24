@@ -10,17 +10,17 @@ const (
 )
 
 type ContentBlock struct {
-	Kind BlockKind
+	Kind BlockKind `json:"kind"`
 
-	Text     string // TextBlock
-	Thinking string // ThinkingBlock
+	Text     string `json:"text,omitempty"`     // TextBlock
+	Thinking string `json:"thinking,omitempty"` // ThinkingBlock
 
-	ToolCallID string // ToolBlock
-	ToolName   string // ToolBlock
-	Args       string // ToolBlock
+	ToolCallID string `json:"toolCallId,omitempty"` // ToolBlock
+	ToolName   string `json:"toolName,omitempty"`   // ToolBlock
+	Args       string `json:"args,omitempty"`       // ToolBlock
 
-	ImageMime string // ImageBlock
-	ImageData string // ImageBlock
+	ImageMime string `json:"imageMime,omitempty"` // ImageBlock
+	ImageData string `json:"imageData,omitempty"` // ImageBlock
 }
 
 func NewTextBlock(text string) ContentBlock {

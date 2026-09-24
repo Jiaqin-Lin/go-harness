@@ -32,7 +32,22 @@ func Run(ctx context.Context,
 		newMessages = append(newMessages, msg)
 
 		if msg.StopReason == types.ErrorStop || msg.StopReason == types.AbortedStop {
-			emit(types.Event{Type: types.TurnEndEvent, Message: msg})
+			// 中断可能发生在工具参数已经流了一部分之后，这些调用已经进了历史。
+			// 给它们补上配对的结果，否则每一条 assistant 都带着悬空的 tool_call
+			var unstartedMessages []*types.Message
+			if toolCalls := msg.ToolCalls(); len(toolCalls) > 0 {
+				reason := msg.ErrorMessage
+				if reason == "" {
+					reason = "用户取消了这一轮"
+				}
+				unstartedMessages = tools.FailUnstartedToolCalls(toolCalls, reason, emit)
+				newMessages = append(newMessages, unstartedMessages...)
+			}
+			emit(types.Event{
+				Type:               types.TurnEndEvent,
+				Message:            msg,
+				ToolResultMessages: unstartedMessages,
+			})
 			break
 		}
 

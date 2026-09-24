@@ -54,7 +54,10 @@ func apply(msg *types.Message, event types.AssistantEvent) {
 		block(msg, event.ContentBlockIndex, types.ToolBlock).Args += event.Delta
 
 	case types.AssistantDoneEvent:
+		// done 也可能是失败收尾（流在给出结束原因前就断了），ErrorMessage 得跟着过来，
+		// 不然错误原因到这一层就没了
 		msg.StopReason = event.Message.StopReason
+		msg.ErrorMessage = event.Message.ErrorMessage
 		msg.Usage = event.Message.Usage
 
 	case types.AssistantErrorEvent:

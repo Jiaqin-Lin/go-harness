@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持已做完并实测**（read 能读图、wire 能把图送出去）。**产品方向改成 web 版，TUI 不做了**（2026-09-24 定），所以 `main.go` 那套 bubbletea 是过渡产物，`tui.Emit` 仍是空函数。
+DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持已做完并实测**（read 能读图、wire 能把图送出去）；**会话管理已做完并实测**（新建 / 继续 / 列出，`internal/session`，格式对齐 pi）。**产品方向改成 web 版，TUI 不做了**（2026-09-24 定），所以 `main.go` 那套 bubbletea 是过渡产物，`tui.Emit` 仍是空函数。
 
 ---
 
@@ -16,9 +16,10 @@ DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持
 | `tools`（read / bash / write / edit） | ✅ 能用，有测试；read 现在也能读图 |
 | `core`（loop） | ✅ 能用 |
 | **图片** | ✅ 已实现并实测：read 读图（png/jpeg/gif/webp/bmp，超限自动缩放）、wire 带图（tool 消息和 user 消息都带得动）。**实测跑的是 png，webp/bmp 的 API 接受度没测** |
+| **`session`（会话管理）** | ✅ 能用，有单测 + 端到端实测：新建 / 继续 / 列出，落在 `~/.go-harness/sessions/` |
 | **`tui`（渲染）** | ❌ 不做了，改 web 版。`tui.Emit` 仍是空函数（`internal/tui/event.go:5`） |
 
-**验证方式**：`main.go` 走的是 bubbletea TUI，需要真 TTY，没法脚本化驱动。当时是临时写了个命令行驱动（`cmd/demo`，跑完已删）直接调 `core.Run`，在 `/tmp/java-crud` 让模型写了个 Java CRUD：**5 轮、7 次工具调用、0 错误**，产物我自己重新 `javac` + `java` 复验过。
+**验证方式**：`main.go` 走的是 bubbletea TUI，需要真 TTY，没法脚本化驱动，所以有个手动命令行驱动 `cmd/session-e2e` 直接调 `core.Run`（⚠️ 它会打真模型、花真钱，只手动跑，见第六节）。当初的 Java CRUD 是用同类驱动在 `/tmp/java-crud` 跑的：**5 轮、7 次工具调用、0 错误**，产物重新 `javac` + `java` 复验过。
 
 图片验证同一个路子：临时驱动直接调 `core.Run`，让模型 read 一张四色块图（颜色顺序故意反着排），报对了。**测的时候必须把 bash 工具摘掉**，不然模型会自己解码 PNG 对像素——那样测出来的是它会写脚本，不是它看得见（第一轮就是这么被骗过去的）。
 
@@ -90,6 +91,22 @@ osascript -e 'set f to (open for access POSIX file "/tmp/clip1.png" with write p
 - **还没实测的**：webp/bmp 原样透传时 DeepSeek 收不收（png/jpeg/gif 实测没问题）；换成 `deepseek-v4-pro`（不支持图片输入）时会怎么报错
 - wire 里 assistant 的 `content` 永远保持字符串，只有 tool / user 消息带图时才换成 content parts 数组
 
+### 8. 会话文件（2026-09-24 实装）
+
+JSONL，第一行 header，之后一行一个 entry。**`parentId` 记在 entry 上（树）**，从 leaf 沿 parentId 回溯再反转就是给模型的历史，分支 = 从旧节点再挂一个子节点。目录：`~/.go-harness/sessions/--<cwd 去掉开头 / 再把 / \ : 换成 - >--/`，文件名 `<ISO 时间戳，: 和 . 换成 ->_<32 位 hex>.jsonl`，**续跑靠 mtime 排序，文件名里的时间戳只是给人看的**。
+
+- **文件在第一次落盘时才建**：打开就退出的会话在磁盘上不留东西（实测：连目录都不建）
+- **落盘单位是一轮**（跟 pi 每条消息就落盘不同，是刻意的）：`core.Run` 返回后一次性 Append。core.Run 的两个出口都保证每个 tool_call 有配对，所以文件里不会出现半轮 —— 这就是不用抄 pi `runtime/` 那 7500 行恢复状态机的底气
+- **文件里的 `message` 就是 `types.Message` 本身**（给它和 `ContentBlock` 加了小写 JSON tag），没引第二套持久化模型。实测回读之后 thinking 块原样还在 —— 下一轮把它当 `reasoning_content` 发出去，缓存过期也不会 400
+- 读文件一律 `bufio.Reader.ReadBytes`，**别用 `bufio.Scanner`**：默认单行上限 64KB，而消息里可能带 base64 图片，第一行轻松超
+- **还没做的**：不返回 `messageCount` / 首条消息（列表只有时间 + cwd + id）；没有并发保护（两个进程开同一个会话会互相覆盖）
+
+### 9. 中断路径的孤儿 tool_call（2026-09-24 修）
+
+模型出错 / 用户取消时 `core.Run` 原来带着已经流出来的 tool_call 直接 break，那些调用永远不会执行，历史里就留下没有配对的 tool_call → 下一轮请求 400，而且会被 session 固化到磁盘上。现在 break 之前用 `tools.FailUnstartedToolCalls` 给每个调用补一条报错的 tool_result。
+
+同一条路上还修了一个：`provider/generate.go` 的 `apply` 在 done 事件上只接了 `StopReason`，把 `ErrorMessage` 丢了 —— 于是「流没给出结束原因就断了」（`deepseek.go:229`）这个原因到不了上层，文案里会错写成「用户取消了这一轮」。是 `TestRunPairsToolCallsWhenStreamBreaks` 逮到的。
+
 ---
 
 ## 三、文件地图
@@ -104,8 +121,13 @@ internal/core/loop.go           agent loop
 internal/tools/
   read.go / bash.go / write.go / edit.go / exec.go / registry.go
   image.go                    图片嗅探 + 解码 + 缩放重编码（read 读图走这儿）
+internal/session/
+  entry.go                     Header / Entry、id 生成、时间戳
+  session.go                   Session：Append、leaf 回溯、落盘
+  store.go                     cwd 编码、文件名、Create / Open / List / ContinueRecent
 internal/types/                 全部类型定义（见第五节）
 internal/tui/                   ⚠️ event.go 的 Emit 是空的
+cmd/session-e2e/main.go         手动端到端驱动（⚠️ 见第六节「会花真钱」那条）
 ```
 
 配置：`.env`（**已 gitignore**，含真 key）+ `.env.example`（脱敏，可提交）。
@@ -193,6 +215,8 @@ TUI 不做了，`main.go` 那套 bubbletea 是过渡产物。事件流的消费�
 ---
 
 ## 六、踩过的其他坑（避免重踩）
+
+- **端到端测试会花真钱，别把它包成 `_test.go`** —— 打真模型的那条路在 `cmd/session-e2e`（手动跑的 main 包）。`go test ./...` 对 main 包**只编译不执行**，永远不会碰到它。别为了"顺手"改写成 `*_test.go`：那样每跑一次 `go test` 就烧一次钱。现有的 `_test.go` 全是离线的（provider 那几个用 `httptest` 起假服务器）
 
 - **测读图必须把 bash 工具摘掉** —— 不摘的话模型会自己 `bash` 跑脚本解码 PNG 对像素，答案是对的，但证明不了它看得见（详见第一节的验证方式）
 - **pi 的 `read` 工具返回 `[文本说明, 图片块]`**，并对不支持视觉的模型有兜底（省略图片 + 加一句说明）。这个兜底**没做**：只接 DeepSeek 一家，配的又是支持图片的 flash，等真换了不支持视觉的模型再说

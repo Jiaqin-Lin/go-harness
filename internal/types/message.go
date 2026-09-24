@@ -19,11 +19,13 @@ const (
 	AbortedStop  StopReason = "aborted"
 )
 
+// 下面这些小写 tag 是会话文件用的（internal/session）：JSONL 里存的就是这个结构本身，
+// 不另立一套持久化模型。发给模型的 wire 格式由 provider 自己转换，跟这里无关
 type Usage struct {
-	Input  int
-	Cached int
-	Output int
-	Total  int
+	Input  int `json:"input"`
+	Cached int `json:"cached"`
+	Output int `json:"output"`
+	Total  int `json:"total"`
 }
 
 func (u *Usage) CacheHitRate() float64 {
@@ -34,17 +36,17 @@ func (u *Usage) CacheHitRate() float64 {
 }
 
 type Message struct {
-	Role Role
+	Role Role `json:"role"`
 
-	ContentBlocks []ContentBlock
+	ContentBlocks []ContentBlock `json:"contentBlocks,omitempty"`
 
-	Usage        *Usage
-	StopReason   StopReason
-	ErrorMessage string
+	Usage        *Usage     `json:"usage,omitempty"`
+	StopReason   StopReason `json:"stopReason,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
 
-	ToolCallID string
-	ToolName   string
-	IsError    bool
+	ToolCallID string `json:"toolCallId,omitempty"`
+	ToolName   string `json:"toolName,omitempty"`
+	IsError    bool   `json:"isError,omitempty"`
 }
 
 func (m *Message) ToolCalls() []ContentBlock {

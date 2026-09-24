@@ -12,6 +12,7 @@ import (
 	"github.com/reuben/go-harness/internal/core"
 	"github.com/reuben/go-harness/internal/prompts"
 	"github.com/reuben/go-harness/internal/provider"
+	"github.com/reuben/go-harness/internal/session"
 	"github.com/reuben/go-harness/internal/tools"
 	"github.com/reuben/go-harness/internal/tui"
 	"github.com/reuben/go-harness/internal/types"
@@ -39,11 +40,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	allTools := tools.GetAllTools(cwd)
+	sess, err := session.ContinueRecent(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "打开会话失败：%v\n", err)
+		os.Exit(1)
+	}
+
+	allTools := tools.GetAllTools(sess.Cwd())
 
 	conversation := &types.Conversation{
-		SystemPrompt: prompts.BuildSystemPrompt(cwd, allTools),
+		SystemPrompt: prompts.BuildSystemPrompt(sess.Cwd(), allTools),
 		Tools:        allTools,
+		Messages:     sess.Messages(),
 	}
 
 	send := func(text string) {
@@ -51,8 +59,14 @@ func main() {
 			Role:          types.UserRole,
 			ContentBlocks: []types.ContentBlock{types.NewTextBlock(text)},
 		}
-		conversation.Messages = append(conversation.Messages,
-			core.Run(ctx, []*types.Message{prompt}, conversation, llm.Generate, tui.Emit)...)
+		// 以轮为单位落盘：core.Run 返回时，每个 tool_call 都有配对的 tool_result，
+		// 所以文件里不会出现半轮
+		for _, msg := range core.Run(ctx, []*types.Message{prompt}, conversation, llm.Generate, tui.Emit) {
+			conversation.Messages = append(conversation.Messages, msg)
+			if _, err := sess.Append(msg); err != nil {
+				fmt.Fprintf(os.Stderr, "会话没存上：%v\n", err)
+			}
+		}
 	}
 
 	if _, err := tea.NewProgram(tui.NewModel(send)).Run(); err != nil {
