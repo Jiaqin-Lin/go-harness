@@ -105,3 +105,32 @@ func resolvePath(cwd, path string) (string, error) {
 
 	return filepath.Join(cwd, path), nil
 }
+
+// 换行处统一为 LF \n
+func normalizeLF(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+}
+
+// 记录文件用哪种换行：以第一处换行为准，crlf / lf / cr 三选一，落盘时整份文件都按它来
+func recordEnding(text string) string {
+	crlf := strings.Index(text, "\r\n")
+	lf := strings.Index(text, "\n")
+	if crlf >= 0 && crlf == lf-1 {
+		return "\r\n"
+	}
+	cr := strings.Index(text, "\r")
+	if cr >= 0 && lf < 0 {
+		return "\r"
+	}
+	return "\n"
+}
+
+func restoreLineBreaks(text, ending string) string {
+	if ending == "\r\n" {
+		return strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	if ending == "\r" {
+		return strings.ReplaceAll(text, "\n", "\r")
+	}
+	return text
+}
