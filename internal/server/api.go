@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/session"
 	"github.com/reuben/go-harness/internal/types"
 )
@@ -21,10 +22,20 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects", s.handleProjectAdd)
 	mux.HandleFunc("DELETE /api/projects", s.handleProjectRemove)
 	mux.HandleFunc("GET /api/fs", s.handleListDirs)
+	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("DELETE /api/session", s.handleSessionDelete)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
 	mux.HandleFunc("POST /api/chat/abort", s.handleChatAbort)
+}
+
+// handleMeta 是前端的「模型知识」：模型名 + 上下文窗口多大。
+// 窗口是服务端的事（模型配在 .env 里），前端不写死 —— 换个模型不用改前端
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"model":         s.cfg.Model,
+		"contextWindow": provider.ContextWindow(s.cfg.Model),
+	})
 }
 
 type projectDTO struct {

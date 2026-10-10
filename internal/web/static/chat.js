@@ -1,7 +1,7 @@
 // 消息渲染。落过盘的 entry 和正在流的那条走同一套函数 —— 一轮跑完把流式的
 // 换成落盘的，视觉上不该有跳动
 
-import { roleLabel, argsPreview, clip } from './shared.js';
+import { roleLabel, argsPreview, clip, numTokens } from './shared.js';
 
 export function renderMessage(msg, { streaming = false } = {}) {
   const el = document.createElement('div');
@@ -22,9 +22,11 @@ export function updateMessage(el, msg, { streaming = false } = {}) {
   role.textContent = roleLabel(msg);
   head.append(role);
   if (msg.usage) {
+    // 缓存命中率 = cached / input（DeepSeek 的 prompt_tokens 含命中部分）
+    const rate = msg.usage.input > 0 ? `缓存 ${Math.round((msg.usage.cached / msg.usage.input) * 100)}% · ` : '';
     const usage = document.createElement('span');
     usage.className = 'msg-usage';
-    usage.textContent = `${num(msg.usage.input)} in · ${num(msg.usage.output)} out`;
+    usage.textContent = `${numTokens(msg.usage.input)} in · ${rate}${numTokens(msg.usage.output)} out`;
     head.append(usage);
   }
   // 中止 / 出错的轮次要标一下，不然看起来就像模型答到一半没了
@@ -143,11 +145,6 @@ function imageBlock(block) {
   el.className = 'tool-image';
   el.textContent = `图片 ${block.imageMime || ''} ${byteSize(block.imageBytes)}`;
   return el;
-}
-
-function num(value) {
-  if (value >= 1000) return (value / 1000).toFixed(1) + 'k';
-  return String(value);
 }
 
 function byteSize(bytes) {

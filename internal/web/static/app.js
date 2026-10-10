@@ -5,11 +5,14 @@ import { getJSON, request, streamChat } from './api.js';
 import { renderMessage, updateMessage } from './chat.js';
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
-import { summarise, clip } from './shared.js';
+import { summarise, clip, numTokens } from './shared.js';
 
 const el = (id) => document.getElementById(id);
 
 const dom = {
+  app: document.querySelector('.app'),
+  sidebar: document.querySelector('.sidebar'),
+  chat: document.querySelector('.chat'),
   projectList: el('project-list'),
   sidebarEmpty: el('sidebar-empty'),
   graphTitle: el('graph-title'),
@@ -29,6 +32,10 @@ const dom = {
   stop: el('composer-stop'),
   hint: el('composer-hint'),
   remove: el('session-delete'),
+  splitterSidebar: el('splitter-sidebar'),
+  splitterChat: el('splitter-chat'),
+  toggleSidebar: el('toggle-sidebar'),
+  toggleChat: el('toggle-chat'),
 };
 
 const state = {
@@ -41,7 +48,8 @@ const state = {
   preview: '',
   entries: [],
   leafId: '',
-  selected: null,    // 选中的 entry = 接续点
+  selected: null,    // 选中的 entry（右栏只画根到它的路径）
+  pendingBranch: null, // 「+ 建出来的新分支」挂在哪条 entry 下面；非 null 时输入框才对着这条新支路
   busy: false,
   abort: null,
   live: [],          // 这一轮已经画出来、还没落盘的消息
@@ -51,6 +59,12 @@ const state = {
   sawDone: false,    // 这一轮的流有没有正常收尾（没有就可能是断了）
   streamError: '',   // 流里报的错，收尾时再显示
   stopping: false,   // 用户点过停止（跟「连接断了」不是一回事）
+  contextWindow: 0,  // 模型的上下文窗口，启动时问 /api/meta（拿不到就 0 = 不显示分母）
+  // 布局偏好：拖过的栏宽（px，null = 还没拖过、用 CSS 默认）和栏的显隐
+  sidebarW: null,
+  chatW: null,
+  sidebarHidden: false,
+  chatHidden: false,
 };
 
 const graph = new Graph({
@@ -59,10 +73,7 @@ const graph = new Graph({
   edges: dom.graphEdges,
   nodes: dom.graphNodes,
   onSelect: (id) => selectEntry(id),
-  onBranch: (id) => {
-    selectEntry(id);
-    dom.input.focus();
-  },
+  onBranch: (id) => branchFrom(id),
 });
 
 const picker = new DirPicker({
@@ -123,7 +134,23 @@ function projectElement(project) {
     state.open.delete(project.path);
     await refreshProjects();
   });
-  head.append(caret, name, count, remove);
+  // 新建会话的入口在这个方块里（跟 × 一样悬停才显形）；目录不在就没得建
+  let add = null;
+  if (project.exists) {
+    add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn btn-ghost btn-icon';
+    add.textContent = '+';
+    add.title = '在这个项目里新建会话';
+    add.setAttribute('aria-label', '新建会话');
+    add.addEventListener('click', (event) => {
+      event.stopPropagation();
+      newSession(project.path, /* openSidebar */ true);
+    });
+  }
+  head.append(caret, name, count);
+  if (add) head.append(add);
+  head.append(remove);
   wrap.append(head);
 
   if (!project.exists) {
@@ -137,13 +164,6 @@ function projectElement(project) {
 function sessionList(project) {
   const list = document.createElement('div');
   list.className = 'session-list';
-
-  const add = document.createElement('button');
-  add.type = 'button';
-  add.className = 'session-row session-new';
-  add.textContent = '+ 新会话';
-  add.addEventListener('click', () => newSession(project.path));
-  list.append(add);
 
   if (state.draft && state.cwd === project.path) {
     list.append(activeRow('新会话（还没开始）', ''));
@@ -201,6 +221,7 @@ function newSession(cwd, openSidebar = false) {
   state.entries = [];
   state.leafId = '';
   state.selected = null;
+  state.pendingBranch = null;
   state.freshId = null;
   clearLive();
   graph.reset(); // 新树从原点重新取景；不然会沿用上一个会话拖过的镜头，画到屏幕外
@@ -228,6 +249,7 @@ async function openSession(cwd, id, entryId = null) {
   state.open.add(cwd);
   applySession(view);
   state.selected = (entryId && entryById(entryId) ? entryId : state.leafId) || null;
+  state.pendingBranch = null;
   state.freshId = null;
 
   clearLive();
@@ -255,13 +277,30 @@ async function reloadSession() {
   renderAll();
 }
 
+// 点节点 = 只看这条支路（右栏画到它为止）；要接着说话得先按 +（见 branchFrom）
 function selectEntry(id) {
-  if (state.selected === id) return;
+  if (state.selected === id && state.pendingBranch === null) return;
+  state.pendingBranch = null;
+  applySelection(id);
+}
+
+// + 按钮：在图上把「待分出的新分支」画出来，输入框才解锁 ——
+// 用户先看到分支长在哪儿，再决定说什么
+function branchFrom(id) {
+  if (state.busy) return;
+  state.pendingBranch = id;
+  applySelection(id);
+  dom.input.focus();
+}
+
+function applySelection(id) {
   state.selected = id;
   renderGraph();
   renderChat();
+  // 点开一轮 = 要看这轮的问答，翻到尾巴（回答在最后）
+  dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
   renderComposer();
-  graph.reveal(id);
+  graph.reveal(state.pendingBranch !== null ? PENDING_ID : id);
   updateHash();
 }
 
@@ -293,11 +332,90 @@ function renderAll() {
   renderComposer();
 }
 
+const PENDING_ID = '__pending__'; // 幽灵节点（+ 画出来的待分出新分支）在图上占的 id
+
 function renderGraph() {
-  const hasTree = state.entries.length > 0;
-  dom.graphEmpty.hidden = hasTree;
-  dom.graphTitle.textContent = state.entries.length ? `${state.entries.length} 个节点` : '';
-  graph.render(state.entries, { selectedId: state.selected, leafId: state.leafId, freshId: state.freshId });
+  const { nodes, owner } = graphModel();
+
+  dom.graphEmpty.hidden = state.entries.length > 0;
+  dom.graphTitle.textContent = nodes.length ? `${nodes.length} 轮` : '';
+
+  // 真实 entry 映射回它所属轮次的节点：owner 里都有，没收录的（文件截断）
+  // 沿父链往上找
+  const nodeId = (id) => {
+    for (let cur = id, guard = 0; cur && guard < 10000; guard++) {
+      if (owner.has(cur)) return owner.get(cur);
+      cur = entryById(cur)?.parentId || null;
+    }
+    return null;
+  };
+  if (state.pendingBranch !== null) {
+    nodes.push({ id: PENDING_ID, parentId: state.pendingBranch, message: null });
+  }
+  graph.render(nodes, {
+    selectedId: state.pendingBranch !== null ? PENDING_ID : nodeId(state.selected),
+    leafId: nodeId(state.leafId),
+    freshId: nodeId(state.freshId),
+    sessionId: state.sessionId,
+  });
+}
+
+// graphModel 把真实 entry 树折成图上的「轮」：一个节点 = 一轮对话（你问的那句
+// + 它的回答，中间调的工具有多少都并进这一轮）。节点的 id 用这一轮的结尾 entry ——
+// 点开看到整轮问答、「+」在回答之后分叉，都对着它来。owner 是反向映射：
+// 每条 entry -> 它所属轮次的节点 id
+function graphModel() {
+  const byId = new Map(state.entries.map((e) => [e.id, e]));
+  const children = new Map();
+  for (const entry of state.entries) {
+    if (!entry.parentId || !byId.has(entry.parentId)) continue;
+    if (!children.has(entry.parentId)) children.set(entry.parentId, []);
+    children.get(entry.parentId).push(entry);
+  }
+
+  const owner = new Map();
+  const nodes = [];
+
+  for (const entry of state.entries) {
+    if (entry.message?.role !== 'user') continue;
+
+    // 一轮的结尾：顺着回答链往下走，到叶子停。遇到用户消息就是下一轮了；
+    // 遇到岔口（旧版界面能在半路分叉）也走回答链那条，分出去的那支挂在
+    // 这一轮节点下面（它的父节点会回溯到本条用户消息）
+    const steps = [entry];
+    let end = entry;
+    for (;;) {
+      const next = (children.get(end.id) || []).find((kid) => kid.message?.role !== 'user');
+      if (!next) break;
+      end = next;
+      steps.push(end);
+    }
+    for (const step of steps) owner.set(step.id, end.id);
+
+    // 图的父节点 = 最近的上一条用户消息那一轮（中间隔着的是它的回答）
+    let parent = entry.parentId || null;
+    while (parent && byId.get(parent)?.message?.role !== 'user') {
+      parent = byId.get(parent)?.parentId || null;
+    }
+    nodes.push({
+      ...end,
+      parentId: parent ? owner.get(parent) || null : null,
+      message: entry.message, // 节点上显示的是你问的那句
+      stopReason: end.message?.stopReason || '', // 中止/出错标在节点角上
+    });
+  }
+  return { nodes, owner };
+}
+
+// turnLabel 给一轮起个短名：从条目沿父链往上找，这一轮是从哪句用户消息起的
+function turnLabel(entryId) {
+  for (let id = entryId, guard = 0; id && guard < 10000; guard++) {
+    const entry = entryById(id);
+    if (!entry) break;
+    if (entry.message?.role === 'user') return clip(summarise(entry.message), 16);
+    id = entry.parentId || null;
+  }
+  return '这一轮';
 }
 
 function renderChat() {
@@ -313,13 +431,31 @@ function renderChat() {
     }
   });
   dom.chatTitle.textContent = state.title || state.preview || (state.sessionId ? '新会话' : '');
-  // 分支点在哪已经写在输入框那行了，这里只说这条路径有多长
-  dom.chatBranch.textContent = path.length ? `${path.length} 条消息` : '';
+  dom.chatBranch.textContent = pathSummary(path);
   renderComposer();
 }
 
+// pathSummary 是右栏头第二行：路径多长、上下文占了多少、缓存命中多少。
+// 上下文取路径上最后一条带 usage 的消息 —— 它的 input+output 就是接着往下
+// 说时要带的历史大小；窗口大小问服务端要（/api/meta，模型知识不写死在这）
+function pathSummary(path) {
+  if (!path.length) return '';
+  let last = null;
+  for (const entry of path) {
+    if (entry.message?.usage) last = entry.message.usage;
+  }
+
+  const parts = [`${path.length} 条消息`];
+  if (last) {
+    const used = numTokens(last.input + last.output);
+    parts.push(`上下文 ${used}${state.contextWindow ? ` / ${numTokens(state.contextWindow)}` : ''}`);
+    if (last.input > 0) parts.push(`缓存 ${Math.round((last.cached / last.input) * 100)}%`);
+  }
+  return parts.join(' · ');
+}
+
 function renderComposer() {
-  const ready = Boolean(state.sessionId) && !state.busy;
+  const ready = Boolean(state.sessionId) && !state.busy && sendParent() !== null;
   dom.input.disabled = !ready;
   dom.send.disabled = !ready || !dom.input.value.trim();
   dom.stop.hidden = !state.busy;
@@ -327,19 +463,33 @@ function renderComposer() {
   dom.hint.textContent = state.busy ? '正在跑…' : branchHint();
 }
 
+// sendParent 是「这一句接在哪儿」：只有两个地方能接 —— 当前的 tip（接着往下说）、
+// 或 + 画出来的新分支。null = 选中的是历史节点，得先按 +
+function sendParent() {
+  if (state.pendingBranch !== null) return state.pendingBranch;
+  if (!state.entries.length) return ''; // 全新会话：这句就是起点
+  if (state.selected && state.selected === state.leafId) return state.selected;
+  return null;
+}
+
 function branchHint() {
   if (!state.sessionId) return '先选一个会话，或者新建一个';
-  if (!state.selected) return state.entries.length ? '从开头另起一条' : '这一句就是起点';
-  const entry = entryById(state.selected);
-  const short = clip(summarise(entry?.message), 16);
-  return state.selected === state.leafId ? `接着「${short}」往下` : `从「${short}」之后分出新的一条`;
+  if (state.pendingBranch !== null) {
+    return `在「${turnLabel(state.pendingBranch)}」这一轮之后分出新的一条，说点什么`;
+  }
+  if (!state.entries.length) return '这一句就是起点';
+  if (state.selected === state.leafId) {
+    return `接着「${turnLabel(state.selected)}」往下`;
+  }
+  return '这是历史里的一轮 —— 按它上面的 + 才能从这儿分出新的一条';
 }
 
 // ── 发消息 ───────────────────────────────────────────────
 
 async function send() {
   const text = dom.input.value.trim();
-  if (!text || state.busy || !state.sessionId) return;
+  const parent = sendParent();
+  if (!text || state.busy || !state.sessionId || parent === null) return;
 
   const entriesBefore = state.entries.length;
   state.sawDone = false;
@@ -362,7 +512,7 @@ async function send() {
   let failure = '';
   try {
     await streamChat(
-      { cwd: state.cwd, sessionId: state.sessionId, parentId: state.selected || '', text },
+      { cwd: state.cwd, sessionId: state.sessionId, parentId: parent, text },
       handleEvent,
       controller.signal,
     );
@@ -552,6 +702,9 @@ function adoptEntry(entry) {
   state.leafId = entry.id;
   state.freshId = entry.id;
 
+  // 新分支的第一条落盘了，幽灵节点退役，真节点接管这个位置
+  if (state.pendingBranch !== null && entry.parentId === state.pendingBranch) state.pendingBranch = null;
+
   const stay = pinned();
   if (live) {
     live.el.dataset.entryId = entry.id;
@@ -645,6 +798,106 @@ el('session-delete').addEventListener('click', async () => {
 el('add-project').addEventListener('click', () => picker.open(state.cwd || ''));
 el('add-project-empty').addEventListener('click', () => picker.open(state.cwd || ''));
 
+// ── 面板宽度与显隐 ───────────────────────────────────────
+// 两条分隔条拖宽窄，工具栏两个按钮藏/露；偏好存 localStorage，刷新还在
+
+const LAYOUT_KEY = 'ui:layout';
+
+function loadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+    state.sidebarW = saved.sidebarW || null;
+    state.chatW = saved.chatW || null;
+    state.sidebarHidden = Boolean(saved.sidebarHidden);
+    state.chatHidden = Boolean(saved.chatHidden);
+  } catch {
+    // 存坏了就用默认布局
+  }
+}
+
+function saveLayout() {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+      sidebarW: state.sidebarW,
+      chatW: state.chatW,
+      sidebarHidden: state.sidebarHidden,
+      chatHidden: state.chatHidden,
+    }));
+  } catch {
+    // 存不下不影响眼前
+  }
+}
+
+function applyLayout() {
+  dom.app.classList.toggle('is-sidebar-hidden', state.sidebarHidden);
+  dom.app.classList.toggle('is-chat-hidden', state.chatHidden);
+  dom.toggleSidebar.classList.toggle('is-off', state.sidebarHidden);
+  dom.toggleChat.classList.toggle('is-off', state.chatHidden);
+  if (state.sidebarW) document.documentElement.style.setProperty('--sidebar-w', `${state.sidebarW}px`);
+  if (state.chatW) document.documentElement.style.setProperty('--chat-w', `${state.chatW}px`);
+}
+
+// wireSplitter 让一条分隔条拖动改宽度。invert 给「分隔条在面板左边」的那种用：
+// 往左拖是把面板拉宽
+function wireSplitter(element, { min, max, invert = false, current, apply }) {
+  let drag = null;
+  element.addEventListener('pointerdown', (event) => {
+    drag = { x: event.clientX, start: current() };
+    element.setPointerCapture(event.pointerId);
+    element.classList.add('is-dragging');
+    event.preventDefault();
+  });
+  element.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    const delta = (event.clientX - drag.x) * (invert ? -1 : 1);
+    apply(Math.round(Math.min(Math.max(drag.start + delta, min), max)));
+  });
+  const end = (event) => {
+    if (!drag) return;
+    drag = null;
+    element.classList.remove('is-dragging');
+    if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
+    saveLayout();
+  };
+  element.addEventListener('pointerup', end);
+  element.addEventListener('pointercancel', end);
+}
+
+wireSplitter(dom.splitterSidebar, {
+  min: 180,
+  max: 420,
+  current: () => state.sidebarW || dom.sidebar.getBoundingClientRect().width,
+  apply: (width) => {
+    state.sidebarW = width;
+    applyLayout();
+  },
+});
+
+wireSplitter(dom.splitterChat, {
+  min: 320,
+  max: 760,
+  invert: true, // 对话栏贴着右边，分隔条往左拖才是把它拉宽
+  current: () => state.chatW || dom.chat.getBoundingClientRect().width,
+  apply: (width) => {
+    state.chatW = width;
+    applyLayout();
+  },
+});
+
+dom.toggleSidebar.addEventListener('click', () => {
+  state.sidebarHidden = !state.sidebarHidden;
+  applyLayout();
+  saveLayout();
+});
+
+dom.toggleChat.addEventListener('click', () => {
+  state.chatHidden = !state.chatHidden;
+  applyLayout();
+  saveLayout();
+  // 藏着的这段时间流式更新会把「贴底」状态弄丢，重新露出来就回到最新
+  if (!state.chatHidden) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
+});
+
 // ── 地址栏 ───────────────────────────────────────────────
 // 会话和选中节点进 hash：刷新页面回到原处，也能直接把链接发给自己
 
@@ -706,7 +959,20 @@ function withPin(mutate) {
 
 // ── 起步 ─────────────────────────────────────────────────
 
+// 模型信息（上下文窗口多大）。拉不到就算了，右栏那行字少个分母而已
+async function loadMeta() {
+  try {
+    const meta = await getJSON('/api/meta');
+    state.contextWindow = meta.contextWindow || 0;
+  } catch {
+    state.contextWindow = 0;
+  }
+}
+
+loadLayout();
+applyLayout();
 await refreshProjects();
+await loadMeta();
 renderAll();
 await applyHash();
 window.addEventListener('hashchange', applyHash);

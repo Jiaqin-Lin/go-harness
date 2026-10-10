@@ -40,3 +40,11 @@ export function clip(text, limit) {
   const line = String(text ?? '').replace(/\s+/g, ' ').trim();
   return line.length > limit ? line.slice(0, limit) + '…' : line;
 }
+
+// numTokens 把 token 数压成短写法：12800 -> 12.8k、1048576 -> 1M
+export function numTokens(value) {
+  if (!value) return '0';
+  if (value >= 1e6) return (value / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (value >= 1000) return (value / 1000).toFixed(1) + 'k';
+  return String(value);
+}

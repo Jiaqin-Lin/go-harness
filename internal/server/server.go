@@ -18,7 +18,9 @@ import (
 type Config struct {
 	Port int
 	// Cwd 是服务进程的启动目录，目录选择器默认从这儿起
-	Cwd      string
+	Cwd string
+	// Model 是配的模型名。前端的上下文占用要显示分母，得知道窗口多大
+	Model    string
 	Generate provider.GenerateFunction
 }
 

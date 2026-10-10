@@ -94,16 +94,46 @@ body {
 *::-webkit-scrollbar-track { background: transparent; }
 
 .app {
+  position: relative; /* 两条拖宽度的分隔条挂在这上面 */
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  /* 行必须显式定死：隐式的 auto 行会被聊天记录的高度撑开，body 又 overflow:hidden，
+     结果整条右栏滚不动、输入框被推出屏幕（行约束在这一层和 .work 那层都要有） */
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
 }
 
 .work {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--chat-w);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
 }
+
+/* ── 面板分隔条与显隐 ─────────────────────────────────── */
+
+.splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.splitter--sidebar { left: calc(var(--sidebar-w) - 3px); }
+.splitter--chat { right: calc(var(--chat-w) - 3px); }
+.splitter:hover, .splitter.is-dragging { background: var(--accent-soft); }
+
+.app.is-sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+.app.is-sidebar-hidden .sidebar,
+.app.is-sidebar-hidden .splitter--sidebar { display: none; }
+
+.app.is-chat-hidden .work { grid-template-columns: minmax(0, 1fr); }
+.app.is-chat-hidden .chat,
+.app.is-chat-hidden .splitter--chat { display: none; }
+
+.btn.is-off { opacity: .45; }
 
 /* ── 控件 ─────────────────────────────────────────────── */
 
@@ -205,9 +235,6 @@ body {
 .session-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { display: block; font-size: 11px; color: var(--text-3); margin-top: 1px; }
 
-.session-new { color: var(--text-3); }
-.session-new:hover { color: var(--text); }
-
 /* ── 树图 ─────────────────────────────────────────────── */
 
 .graph {
@@ -260,12 +287,11 @@ body {
 
 .graph-nodes { position: absolute; top: 0; left: 0; }
 
+/* 宽高由 graph.js 按节点的实际尺寸内联给出（可拖右下角改），CSS 不再定死 */
 .node {
   position: absolute;
   top: 0;
   left: 0;
-  width: 208px;
-  height: 56px;
   padding: 7px 10px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -323,9 +349,37 @@ body {
   overflow: hidden;
 }
 .node.is-selected .node-text { color: var(--text); }
-.node--tool .node-text { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
-.node--tool { height: 40px; padding: 6px 10px; }
-.node--tool .node-head { margin-bottom: 2px; }
+
+/* 拖过尺寸的节点：字数不再压在 2 行，盒子多大就露多少 */
+.node.is-sized .node-text { display: block; }
+
+/* + 按出来的待分出分支：虚线占位，还没有任何内容 */
+.node--ghost { border-style: dashed; background: transparent; cursor: default; }
+
+/* 右下角的拖拽手柄。16px 的命中区，视觉只有一个小角 */
+.node-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  display: none;
+}
+.node-resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--line-2);
+  border-bottom: 2px solid var(--line-2);
+  border-bottom-right-radius: 2px;
+}
+.node:hover .node-resize, .node.is-selected .node-resize { display: block; }
+.node-resize:hover::after { border-color: var(--text-2); }
+.graph-viewport.is-resizing { cursor: nwse-resize; }
 
 .node.is-fresh { animation: node-in .22s ease-out both; }
 @keyframes node-in {
@@ -548,6 +602,11 @@ body {
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); max-height: 40dvh; }
   .work { grid-template-columns: 100%; grid-template-rows: minmax(160px, 40%) minmax(0, 1fr); }
   .chat { border-left: 0; border-top: 1px solid var(--line); }
+  /* 堆叠布局里没有左右「侧」了，拖宽度的分隔条没意义 */
+  .splitter { display: none; }
+  /* 藏掉一栏之后另一栏别占在被隐藏那栏的行上 */
+  .app.is-sidebar-hidden { grid-template-rows: minmax(0, 1fr); }
+  .app.is-chat-hidden .work { grid-template-rows: minmax(0, 1fr); }
 }
 
 /* ── 动效偏好 ─────────────────────────────────────────── */

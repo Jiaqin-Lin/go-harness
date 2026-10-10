@@ -81,7 +81,7 @@ func newTestServer(t *testing.T, llm *stubLLM) (base, cwd string) {
 	t.Setenv("HOME", t.TempDir()) // 会话别写进真的 ~/.go-harness
 	cwd = t.TempDir()
 
-	srv := New(Config{Port: 0, Cwd: cwd, Generate: llm.generate})
+	srv := New(Config{Port: 0, Cwd: cwd, Model: "deepseek-flash", Generate: llm.generate})
 	listener, err := srv.Listen()
 	if err != nil {
 		t.Fatalf("监听失败：%v", err)
@@ -497,5 +497,30 @@ func TestAbortStillPersistsTurn(t *testing.T) {
 	}
 	if got := view.Entries[1].Message.StopReason; got != "aborted" {
 		t.Errorf("第二条该记成中止，实际 %q", got)
+	}
+}
+
+// meta 给前端的是模型名和上下文窗口：右栏那行「上下文 x / y」的分母从这来
+func TestMetaReportsContextWindow(t *testing.T) {
+	base, _ := newTestServer(t, &stubLLM{})
+
+	resp, err := http.Get(base + "/api/meta")
+	if err != nil {
+		t.Fatalf("请求 /api/meta 失败：%v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("meta 返回 %d", resp.StatusCode)
+	}
+
+	var meta struct {
+		Model         string `json:"model"`
+		ContextWindow int    `json:"contextWindow"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		t.Fatalf("响应不是合法 JSON：%v", err)
+	}
+	if meta.Model != "deepseek-flash" || meta.ContextWindow != 1<<20 {
+		t.Fatalf("meta = %+v，想要 deepseek-flash / %d", meta, 1<<20)
 	}
 }

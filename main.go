@@ -39,6 +39,7 @@ func main() {
 	srv := server.New(server.Config{
 		Port:     *port,
 		Cwd:      cwd,
+		Model:    model,
 		Generate: provider.NewDeepSeek(apiKey, baseURL, model).Generate,
 	})
 

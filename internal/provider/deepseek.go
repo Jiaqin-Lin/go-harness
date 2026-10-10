@@ -26,6 +26,16 @@ type DeepSeek struct {
 	http    *http.Client
 }
 
+// ContextWindow 是各模型的上下文窗口大小。只列接入过的；未知模型给 0，
+// 前端拿到 0 就只显示用了多少、不显示分母
+func ContextWindow(model string) int {
+	switch model {
+	case "deepseek-flash", "deepseek-v4-pro":
+		return 1 << 20
+	}
+	return 0
+}
+
 func NewDeepSeek(apiKey, baseURL, model string) *DeepSeek {
 	return &DeepSeek{
 		apiKey:  apiKey,

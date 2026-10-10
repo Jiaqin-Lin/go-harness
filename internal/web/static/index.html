@@ -29,6 +29,8 @@
       <div class="graph-toolbar">
         <span class="graph-title" id="graph-title"></span>
         <span class="graph-actions">
+          <button class="btn btn-ghost btn-small" id="toggle-sidebar" title="隐藏 / 显示左侧项目栏">项目</button>
+          <button class="btn btn-ghost btn-small" id="toggle-chat" title="隐藏 / 显示右侧对话栏">对话</button>
           <button class="btn btn-ghost btn-small" id="graph-fit">适应画面</button>
         </span>
       </div>
@@ -40,7 +42,7 @@
       </div>
       <div class="graph-empty" id="graph-empty">
         <p class="empty-title">选一个会话</p>
-        <p class="empty-body">左边挑项目里的会话，这里会把它长成的树画出来。点一个节点就从它继续。</p>
+        <p class="empty-body">左边挑项目里的会话，这里会把它长成的树画出来。一个节点是一轮问答 —— 点开看那一轮，按节点上的 + 从这儿分出新的一条。</p>
       </div>
     </section>
 
@@ -71,6 +73,9 @@
     </section>
 
   </main>
+
+  <div class="splitter splitter--sidebar" id="splitter-sidebar" aria-hidden="true"></div>
+  <div class="splitter splitter--chat" id="splitter-chat" aria-hidden="true"></div>
 </div>
 
 <div class="modal" id="dirpicker" hidden>
