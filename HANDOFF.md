@@ -2,6 +2,29 @@
 
 > 写于 2026-09-24。用于开新 session 继续。
 
+---
+
+## 2026-10-10 更新：web 版已落地
+
+**TUI 删干净了**：`internal/tui/` 三个文件连同 bubbletea / bubbles 依赖一起没了，`main.go` 现在是 HTTP 服务入口（`go run .`，默认 `127.0.0.1:8776`，只绑本机）。下面第一章表格里「`tui`（渲染）」那行、第二章第 8 条提到的 `tui.Emit`、第三章文件地图里的 `main.go` 和 `internal/tui` 都已过时，**以本节为准**。
+
+**新增的包**：
+
+| 包 | 干什么 |
+|---|---|
+| `internal/server` | HTTP + SSE 传输层。项目 / 会话 / 目录浏览 / 树图数据，`POST /api/chat` 边跑边流。安全四条：只绑 127.0.0.1、校验 Host（防 DNS rebinding）、POST 必须 `application/json`、不发任何 CORS 头 —— 这进程手里有 bash 工具，等于一台本机 shell |
+| `internal/web` | 前端。原生 ES module + CSS，`//go:embed` 进二进制，**没有构建步骤**（改完 js/css 要重启 `go run .` 才生效） |
+| `internal/title` | 异步标题生成节点：一轮跑完如果会话还没有标题，后台起 goroutine 调一次模型（独立 ctx + 超时），写 `<会话文件>.jsonl.title` |
+| `internal/provider/transform.go` | 发请求前给没配对的 tool_call 补合成 tool_result |
+
+**会话分叉**：`Session.AppendAfter(parentID, msg)` 挂到指定父节点，`MessagesAt(entryID)` 取「根 → 该 entry」那一条路径。分叉不用复制文件、不改格式 —— 树上挂兄弟节点而已（pi 的 `branch(id)` 也是一行 `leafId = id`）。web 上点节点悬停出的「＋」= 把接续点定在这儿，下一条消息就挂在它下面。
+
+**分叉点合法性不用校验了**：路径停在带 tool_call 的 assistant 上会缺配对、请求 400，原本打算在前端禁掉这类节点；现在改成 `provider.NormalizeToolCalls` 在发请求前统一补上合成结果，于是分叉点随便点、并行 tool_call 只跑一半也合法、崩在轮中的历史还能继续。抄的是 pi 的 `transform-messages.ts`，但**没抄它「跳过 error/aborted 的 assistant」那半段** —— loop 已经替那些调用补过配对，再跳过反而制造新的孤儿。
+
+**还没做的**：接口里图片只给形状（`{mime, bytes}`），前端渲染成占位符，真要看得加个按需取内容的端点；bash 的流式中间输出（下面待办 B）仍然没做。
+
+---
+
 ## 一句话状态
 
 DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持已做完并实测**（read 能读图、wire 能把图送出去）；**会话管理已做完并实测**（新建 / 继续 / 列出，`internal/session`，格式对齐 pi）。**产品方向改成 web 版，TUI 不做了**（2026-09-24 定），所以 `main.go` 那套 bubbletea 是过渡产物，`tui.Emit` 仍是空函数。

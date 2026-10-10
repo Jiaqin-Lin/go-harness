@@ -200,11 +200,5 @@ func errorResult(text string) types.ToolResult {
 }
 
 func toolResultMessage(callContentBlock types.ContentBlock, toolResult types.ToolResult, isError bool) *types.Message {
-	return &types.Message{
-		Role:          types.ToolResultRole,
-		ContentBlocks: toolResult.ContentBlock,
-		ToolCallID:    callContentBlock.ToolCallID,
-		ToolName:      callContentBlock.ToolName,
-		IsError:       isError,
-	}
+	return types.NewToolResult(callContentBlock.ToolCallID, callContentBlock.ToolName, toolResult.ContentBlock, isError)
 }

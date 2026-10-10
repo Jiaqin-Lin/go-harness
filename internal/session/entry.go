@@ -52,6 +52,20 @@ func newID(taken map[string]*Entry) string {
 	return randomHex(16)
 }
 
+// ValidID 是会话 id 的形状：8~32 位小写 hex。外部传进来的 id 会被拼进文件名
+// 和 glob 模式，所以形状得先卡住
+func ValidID(id string) bool {
+	if len(id) < 8 || len(id) > 32 {
+		return false
+	}
+	for i := range len(id) {
+		if c := id[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func randomHex(n int) string {
 	buf := make([]byte, n)
 	// 拿不到随机数就没法保证 id 不重，这是环境坏了，不是能接着跑的错误

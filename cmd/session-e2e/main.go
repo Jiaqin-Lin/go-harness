@@ -1,4 +1,4 @@
-// 端到端驱动：直接调 core.Run，不走 TUI（TUI 要真 TTY，没法脚本化）。
+// 端到端驱动：直接调 core.Run，不经过 HTTP 层（web 版那条路见 internal/server）。
 //
 // 这个包会花真钱（打真模型），所以它只能是 main 包、只能手动跑：
 // go test ./... 对 main 包只编译不执行，永远不会调到这里。

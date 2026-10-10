@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go-harness</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <header class="sidebar-head">
+      <span class="wordmark">go-harness</span>
+      <button class="btn btn-ghost btn-icon" id="add-project" title="添加项目目录" aria-label="添加项目目录">+</button>
+    </header>
+    <nav class="project-list" id="project-list" aria-label="项目与会话"></nav>
+    <div class="sidebar-empty" id="sidebar-empty">
+      <p class="empty-title">还没有项目</p>
+      <p class="empty-body">选一个本地目录，它的会话都会列在这里。</p>
+      <button class="btn btn-primary" id="add-project-empty">选择项目目录</button>
+    </div>
+  </aside>
+
+  <main class="work">
+
+    <section class="graph" id="graph" aria-label="对话树">
+      <div class="graph-toolbar">
+        <span class="graph-title" id="graph-title"></span>
+        <span class="graph-actions">
+          <button class="btn btn-ghost btn-small" id="graph-fit">适应画面</button>
+        </span>
+      </div>
+      <div class="graph-viewport" id="graph-viewport">
+        <div class="graph-canvas" id="graph-canvas">
+          <svg class="graph-edges" id="graph-edges" aria-hidden="true"></svg>
+          <div class="graph-nodes" id="graph-nodes"></div>
+        </div>
+      </div>
+      <div class="graph-empty" id="graph-empty">
+        <p class="empty-title">选一个会话</p>
+        <p class="empty-body">左边挑项目里的会话，这里会把它长成的树画出来。点一个节点就从它继续。</p>
+      </div>
+    </section>
+
+    <section class="chat" aria-label="对话">
+      <header class="chat-head">
+        <div class="chat-head-text">
+          <span class="chat-title" id="chat-title">新会话</span>
+          <span class="chat-branch" id="chat-branch"></span>
+        </div>
+        <button class="btn btn-ghost btn-small" id="session-delete" title="删除这个会话">删除</button>
+      </header>
+
+      <div class="chat-log" id="chat-log">
+        <div class="chat-history" id="chat-history"></div>
+        <div class="chat-live" id="chat-live"></div>
+      </div>
+
+      <form class="composer" id="composer">
+        <textarea id="composer-input" rows="1" placeholder="说点什么，回车发送，Shift+回车换行" aria-label="输入"></textarea>
+        <div class="composer-foot">
+          <span class="composer-hint" id="composer-hint"></span>
+          <span class="composer-actions">
+            <button type="button" class="btn btn-ghost btn-small" id="composer-stop" hidden>停止</button>
+            <button type="submit" class="btn btn-primary btn-small" id="composer-send" disabled>发送</button>
+          </span>
+        </div>
+      </form>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal" id="dirpicker" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="dirpicker-title">
+    <header class="modal-head">
+      <span id="dirpicker-title">选择项目目录</span>
+      <button class="btn btn-ghost btn-icon" id="dirpicker-close" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-path" id="dirpicker-path"></div>
+    <div class="modal-body" id="dirpicker-list"></div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost btn-small" id="dirpicker-up">上一层</button>
+      <button class="btn btn-primary btn-small" id="dirpicker-pick">选这个目录</button>
+    </footer>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

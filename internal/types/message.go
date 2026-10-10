@@ -1,5 +1,7 @@
 package types
 
+import "strings"
+
 type Role string
 
 const (
@@ -47,6 +49,32 @@ type Message struct {
 	ToolCallID string `json:"toolCallId,omitempty"`
 	ToolName   string `json:"toolName,omitempty"`
 	IsError    bool   `json:"isError,omitempty"`
+}
+
+// NewToolResult 造一条 tool_result 消息。每个 tool_call 都得有配对的它 ——
+// 工具真的跑完、被中断时补的、发请求前合成的，形状都是这一个
+func NewToolResult(callID, toolName string, blocks []ContentBlock, isError bool) *Message {
+	return &Message{
+		Role:          ToolResultRole,
+		ContentBlocks: blocks,
+		ToolCallID:    callID,
+		ToolName:      toolName,
+		IsError:       isError,
+	}
+}
+
+// Text 是消息的正文：只有文本块算数，thinking / 工具调用 / 图片都不算。
+// 会话列表的兜底标题、标题生成的输入要的都是它
+func (m *Message) Text() string { return TextOf(m.ContentBlocks) }
+
+func TextOf(blocks []ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Kind == TextBlock {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func (m *Message) ToolCalls() []ContentBlock {

@@ -70,7 +70,9 @@ func (d *DeepSeek) requestBody(conversation types.Conversation) request {
 	if conversation.SystemPrompt != "" {
 		messages = append(messages, wireMessage{Role: "system", Content: conversation.SystemPrompt})
 	}
-	for _, msg := range conversation.Messages {
+	// 先把没配对的 tool_call 补上结果再转 wire：树上的分支点可以停在任何地方，
+	// 停出孤儿调用的话协议直接不认
+	for _, msg := range NormalizeToolCalls(conversation.Messages) {
 		messages = append(messages, wireMessageFrom(msg))
 	}
 
@@ -122,7 +124,7 @@ func contentOf(blocks []types.ContentBlock) any {
 		}
 	}
 	if !hasImage {
-		return textOf(blocks)
+		return types.TextOf(blocks)
 	}
 
 	parts := make([]wireContentPart, 0, len(blocks))
@@ -171,16 +173,6 @@ func assistantMessage(msg *types.Message) wireMessage {
 	// 所以不能指望它自己找回来
 	wire.ReasoningContent = strings.Join(thinking, "")
 	return wire
-}
-
-func textOf(blocks []types.ContentBlock) string {
-	var parts []string
-	for _, block := range blocks {
-		if block.Kind == types.TextBlock {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.Join(parts, "")
 }
 
 // 下面几个是流式分片的形状。一帧只带变化的那部分字段，缺的字段是零值
