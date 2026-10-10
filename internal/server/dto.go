@@ -17,6 +17,19 @@ type entryDTO struct {
 	ParentID  string      `json:"parentId,omitempty"` // 空 = 根
 	Timestamp string      `json:"timestamp"`
 	Message   *messageDTO `json:"message,omitempty"`
+
+	// Compaction 非空说明这个节点是压缩点：它之前的历史已经折进 Summary，
+	// 图上前端把它画成一个能展开的摘要节点
+	Compaction *compactionDTO `json:"compaction,omitempty"`
+}
+
+type compactionDTO struct {
+	Summary      string `json:"summary"`
+	TokensBefore int    `json:"tokensBefore,omitempty"`
+
+	// FirstKeptEntryID 是保留段的第一条：比它早的 entry 已经折进 Summary。
+	// 前端靠它算「哪些 entry 不再进上下文」，规则跟 Session.contextPath 一致
+	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 }
 
 type messageDTO struct {
@@ -49,6 +62,13 @@ func toEntryDTO(entry *session.Entry) entryDTO {
 		dto.ParentID = *entry.ParentID
 	}
 	dto.Message = toMessageDTO(entry.Message)
+	if entry.Summary != "" {
+		dto.Compaction = &compactionDTO{
+			Summary:          entry.Summary,
+			TokensBefore:     entry.TokensBefore,
+			FirstKeptEntryID: entry.FirstKeptEntryID,
+		}
+	}
 	return dto
 }
 

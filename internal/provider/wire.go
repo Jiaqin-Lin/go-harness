@@ -15,6 +15,8 @@ type request struct {
 	Tools    []wireTool    `json:"tools,omitempty"`
 	Stream   bool          `json:"stream"`
 
+	MaxTokens int `json:"max_tokens,omitempty"`
+
 	// 开了它，用量才在流末尾单独给一帧
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 }
@@ -92,6 +94,7 @@ func (d *DeepSeek) requestBody(conversation types.Conversation) request {
 		Tools:         tools,
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
+		MaxTokens:     conversation.MaxTokens,
 	}
 }
 

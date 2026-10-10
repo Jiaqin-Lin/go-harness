@@ -27,12 +27,31 @@ type stubLLM struct {
 	gate    chan struct{} // 非 nil 就先卡住，用来占着锁测 409
 	started chan struct{} // 每次调用都会 close 一次，测试用它等「真的跑起来了」
 	once    sync.Once
+
+	summary string       // 压缩调用的答复
+	usage   *types.Usage // 每次答复带的用量，nil 就用默认的小数字
+}
+
+// isSummarizationCall 认的是调用形状而不是第几次调用：标题生成也走这个桩，
+// 它什么时候跑不定，按次序编排 replies 会飘
+func isSummarizationCall(conversation types.Conversation) bool {
+	if len(conversation.Tools) > 0 || len(conversation.Messages) != 1 {
+		return false
+	}
+	return strings.HasPrefix(conversation.Messages[0].Text(), "<conversation>")
 }
 
 func (s *stubLLM) generate(ctx context.Context, conversation types.Conversation) <-chan types.AssistantEvent {
 	s.mu.Lock()
 	s.calls++
 	reply := s.replies[min(s.calls-1, len(s.replies)-1)]
+	if s.summary != "" && isSummarizationCall(conversation) {
+		reply = s.summary
+	}
+	usage := s.usage
+	if usage == nil {
+		usage = &types.Usage{Input: 10, Cached: 4, Output: 5, Total: 15}
+	}
 	// 只记带工具的调用：后台生成标题那条也是走这个桩，但它没有工具，
 	// 记进来会把对话历史的断言搅乱
 	if len(conversation.Tools) > 0 {
@@ -61,7 +80,7 @@ func (s *stubLLM) generate(ctx context.Context, conversation types.Conversation)
 		events <- types.AssistantEvent{Type: types.AssistantTextDeltaEvent, Delta: reply, ContentBlockIndex: 0}
 		events <- types.AssistantEvent{Type: types.AssistantDoneEvent, Message: &types.Message{
 			StopReason: types.NormalStop,
-			Usage:      &types.Usage{Input: 10, Cached: 4, Output: 5, Total: 15},
+			Usage:      usage,
 		}}
 	}()
 	return events
@@ -522,5 +541,115 @@ func TestMetaReportsContextWindow(t *testing.T) {
 	}
 	if meta.Model != "deepseek-flash" || meta.ContextWindow != 1<<20 {
 		t.Fatalf("meta = %+v，想要 deepseek-flash / %d", meta, 1<<20)
+	}
+}
+
+// 上下文顶到窗口就自动压缩：会话里多出一条 compaction 节点，模型那边看不到
+// 被折掉的那段历史
+func TestAutoCompactionOnLongContext(t *testing.T) {
+	// 用量报得比窗口大（deepseek-flash 是 1M），下一轮进来就该压
+	llm := &stubLLM{
+		// 保留段要够大，切点才会落在它上面（keepRecent 是 20000 个 token）
+		replies: []string{strings.Repeat("长答复", 30_000)},
+		summary: "## 目标\n把上下文压一下",
+		usage:   &types.Usage{Input: 1_100_000, Cached: 1_000_000, Output: 1000, Total: 1_101_000},
+	}
+	base, cwd := newTestServer(t, llm)
+	const id = "eeee5555ffff6666"
+
+	runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第一问"})
+	second := runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第二问"})
+
+	if kinds := eventTypes(second); !slices.Contains(kinds, "compacting") {
+		t.Fatalf("这一轮该先压缩，实际事件：%v", kinds)
+	}
+
+	var compaction *entryDTO
+	for _, entry := range entriesOf(second) {
+		if entry.Compaction != nil {
+			compaction = &entry
+		}
+	}
+	if compaction == nil {
+		t.Fatal("压缩之后该落一条 compaction entry 并推给前端")
+	}
+	if compaction.Compaction.TokensBefore < 1_000_000 {
+		t.Errorf("压缩前的 token 数不对：%d", compaction.Compaction.TokensBefore)
+	}
+	if compaction.ParentID == "" {
+		t.Error("压缩点该挂在分支点下面，不是凭空多个根")
+	}
+
+	histories := llm.histories()
+	if len(histories) != 2 {
+		t.Fatalf("该调了两次对话模型，实际 %d 次", len(histories))
+	}
+	var seen []string
+	for _, msg := range histories[1] {
+		seen = append(seen, msg.Text())
+	}
+	if len(seen) != 3 {
+		t.Fatalf("压缩后模型该看到 摘要 + 保留段 + 新问题 三条，实际 %v", seen)
+	}
+	if !strings.Contains(seen[0], "把上下文压一下") {
+		t.Errorf("第一条该是摘要，实际 %q", seen[0])
+	}
+	if seen[len(seen)-1] != "第二问" {
+		t.Errorf("最后一条该是这一轮的新消息，实际 %q", seen[len(seen)-1])
+	}
+	for _, text := range seen {
+		if text == "第一问" {
+			t.Error("被摘要掉的「第一问」不该再发给模型")
+		}
+	}
+
+	// 落盘的是追加：被折掉的消息一条不少地留在会话文件里
+	view := fetchSession(t, base, cwd, id)
+	var messages, compactions int
+	for _, entry := range view.Entries {
+		if entry.Compaction != nil {
+			compactions++
+		} else if entry.Message != nil {
+			messages++
+		}
+	}
+	if compactions != 1 || messages < 4 {
+		t.Errorf("会话文件该有 1 个压缩点、一问一答都还在，实际 %d 个压缩点 %d 条消息", compactions, messages)
+	}
+
+	// 前端靠 firstKeptEntryId 算「哪些 entry 被折了」：它得指向保留段第一条
+	// （切点落在那条长答复上，「第一问」被折掉）
+	kept := -1
+	for i := range view.Entries {
+		if view.Entries[i].ID == compaction.Compaction.FirstKeptEntryID {
+			kept = i
+			break
+		}
+	}
+	if kept < 0 {
+		t.Fatalf("firstKeptEntryId %q 不在会话里", compaction.Compaction.FirstKeptEntryID)
+	}
+	if kept == 0 {
+		t.Error("firstKeptEntryId 不该指到第一条 —— 那样一条都没折")
+	}
+	if view.Entries[kept].Message == nil {
+		t.Fatalf("firstKeptEntryId %q 指到了压缩点自己，保留段第一条得是消息", compaction.Compaction.FirstKeptEntryID)
+	}
+	if got := view.Entries[kept].Message.Blocks[0].Text; got != llm.replies[0] {
+		t.Errorf("保留段第一条该是那条长答复，实际 %q", clip(got, 40))
+	}
+}
+
+// 历史没顶到窗口时不该压缩：花的是用户的钱
+func TestNoCompactionUnderThreshold(t *testing.T) {
+	llm := &stubLLM{replies: []string{"第一答", "第二答"}}
+	base, cwd := newTestServer(t, llm)
+	const id = "aaaa7777bbbb8888"
+
+	runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第一问"})
+	second := runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第二问"})
+
+	if kinds := eventTypes(second); slices.Contains(kinds, "compacting") {
+		t.Errorf("没顶到窗口不该压缩，实际事件：%v", kinds)
 	}
 }

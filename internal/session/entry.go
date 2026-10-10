@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	headerType  = "session"
-	messageType = "message"
-	version     = 1
+	headerType     = "session"
+	messageType    = "message"
+	compactionType = "compaction"
+	version        = 1
 )
 
 // Header 是每个会话文件的第一行
@@ -27,13 +28,21 @@ type Header struct {
 }
 
 // Entry 是树上的一个节点。时间戳记在 entry 上，消息本身一个字段都不加 ——
-// 文件里的 message 就是 harness 自己的结构
+// 文件里的 message 就是 harness 自己的结构。
+//
+// compaction 类型的 entry 没有 message，正文在 summary 里：它说「firstKeptEntryID
+// 之前的历史已经折叠成这段摘要」。被折叠的 entry 一条不少地留在文件里，只是不再发给
+// 模型 —— 压缩是追加，不是删除，见 Session.MessagesAt
 type Entry struct {
 	Type      string         `json:"type"`
 	ID        string         `json:"id"`
 	ParentID  *string        `json:"parentId"`
 	Timestamp string         `json:"timestamp"`
 	Message   *types.Message `json:"message,omitempty"`
+
+	Summary          string `json:"summary,omitempty"`
+	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
+	TokensBefore     int    `json:"tokensBefore,omitempty"`
 }
 
 // timestampNow 是会话里所有时间戳的格式：ISO8601 带毫秒，UTC

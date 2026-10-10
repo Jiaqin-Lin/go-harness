@@ -637,3 +637,135 @@ func entryLine(t *testing.T, id, parentID, text string) string {
 	}
 	return string(line)
 }
+
+// 压缩之后模型看到的历史 = 一条摘要 + 保留段，被摘要掉的 entry 还在树上
+func TestCompactionReplacesHistoryWithSummary(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+
+	s, err := Create(cwd)
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	first, _ := s.Append(userMessage("第一问"))
+	answer, err := s.Append(assistantMessage("第一答"))
+	if err != nil {
+		t.Fatalf("落盘失败：%v", err)
+	}
+	// 第一问折进摘要（firstKeptEntryID 指向第一答），之后又聊了一句
+	if _, err := s.AppendCompaction(s.LeafID(), "第一问的来龙去脉", answer, 12345); err != nil {
+		t.Fatalf("落压缩点失败：%v", err)
+	}
+	if _, err := s.Append(userMessage("第二问")); err != nil {
+		t.Fatalf("落盘失败：%v", err)
+	}
+
+	want := []string{summaryPrefix + "第一问的来龙去脉" + summarySuffix, "第一答", "第二问"}
+	if got := textsOf(s.Messages()); !reflect.DeepEqual(got, want) {
+		t.Errorf("压缩后该看到摘要 + 保留段，实际 %v", got)
+	}
+
+	// 压缩是追加，不是删除：被折掉的那条还在树上
+	if s.Entry(first) == nil {
+		t.Error("被摘要掉的 entry 不该从会话里消失")
+	}
+	// 树本身没动：从压缩点之前的那条往下看，还是原来的一问一答
+	if got := textsOf(s.MessagesAt(first)); !reflect.DeepEqual(got, []string{"第一问"}) {
+		t.Errorf("压缩点之前的路径不该被它影响，实际 %v", got)
+	}
+}
+
+// 投影出来的 entry 和消息必须一一对应：压缩时靠这个对应关系把「保留段第一条」
+// 换回 entry id，错位了记下来的 firstKeptEntryID 就是错的
+func TestContextEntriesMatchesMessages(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+
+	s, err := Create(cwd)
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	first, _ := s.Append(userMessage("第一问"))
+	answer, _ := s.Append(assistantMessage("第一答"))
+	if _, err := s.AppendCompaction(answer, "摘要", first, 100); err != nil {
+		t.Fatalf("落压缩点失败：%v", err)
+	}
+	leaf, _ := s.Append(userMessage("第二问"))
+
+	entries := s.ContextEntries(leaf)
+	messages := s.MessagesAt(leaf)
+	if len(entries) != len(messages) {
+		t.Fatalf("entry 和消息对不上：%d vs %d", len(entries), len(messages))
+	}
+	for i, entry := range entries {
+		if entry.Message != messages[i] && entry.Type != compactionType {
+			t.Errorf("第 %d 条对错了：entry %s 配的是 %q", i, entry.ID, messages[i].Text())
+		}
+	}
+}
+
+// 打开一次会话就是重新投影一遍：摘要必须从磁盘上读回来
+func TestCompactionSurvivesReload(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+
+	s, err := Create(cwd)
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	first, _ := s.Append(userMessage("第一问"))
+	answer, _ := s.Append(assistantMessage("第一答"))
+	if _, err := s.AppendCompaction(answer, "摘要内容", first, 999); err != nil {
+		t.Fatalf("落压缩点失败：%v", err)
+	}
+	leaf, _ := s.Append(userMessage("第二问"))
+
+	reopened, err := ContinueRecent(cwd)
+	if err != nil {
+		t.Fatalf("重开失败：%v", err)
+	}
+	if got, want := textsOf(reopened.MessagesAt(leaf)), textsOf(s.MessagesAt(leaf)); !reflect.DeepEqual(got, want) {
+		t.Errorf("重开之后投影不一样：\n先 %v\n后 %v", want, got)
+	}
+	if got := reopened.LastSummaryAt(leaf); got != "摘要内容" {
+		t.Errorf("重开之后拿不到上一版摘要：%q", got)
+	}
+
+	entry := reopened.Entry(leaf)
+	parent := reopened.Entry(*entry.ParentID)
+	if parent == nil || parent.FirstKeptEntryID != first || parent.TokensBefore != 999 {
+		t.Errorf("压缩点没从磁盘上读回来：%+v", parent)
+	}
+}
+
+// 压第二次时只有最新那条压缩点算数：更早的摘要已经被新摘要吞掉了
+func TestNestedCompactionUsesNewestSummary(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+
+	s, err := Create(cwd)
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	first, _ := s.Append(userMessage("第一问"))
+	answer, _ := s.Append(assistantMessage("第一答"))
+	if _, err := s.AppendCompaction(answer, "旧摘要", first, 100); err != nil {
+		t.Fatalf("落压缩点失败：%v", err)
+	}
+	second, _ := s.Append(userMessage("第二问"))
+	leaf, err := s.AppendCompaction(second, "新摘要", second, 200)
+	if err != nil {
+		t.Fatalf("落第二个压缩点失败：%v", err)
+	}
+
+	want := []string{summaryPrefix + "新摘要" + summarySuffix, "第二问"}
+	if got := textsOf(s.MessagesAt(leaf)); !reflect.DeepEqual(got, want) {
+		t.Errorf("第二次压缩之后该只剩新摘要和保留段，实际 %v", got)
+	}
+	if got := s.LastSummaryAt(leaf); got != "新摘要" {
+		t.Errorf("该拿到最新的摘要，实际 %q", got)
+	}
+	if got := s.LastSummaryAt(second); got != "旧摘要" {
+		t.Errorf("第二次压缩点之前的路径上该是旧摘要，实际 %q", got)
+	}
+}

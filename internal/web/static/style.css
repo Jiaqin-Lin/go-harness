@@ -303,6 +303,19 @@ body {
 .node:hover { border-color: var(--line-2); }
 
 .node.is-selected { border-color: var(--accent); background: var(--raised); }
+/* 被折的轮次：留在图上但变暗 —— 模型已经看不到它了 */
+.node.is-folded:not(.is-selected) { opacity: .55; }
+
+/* 节点角标（已压缩 / 压缩点）：同「最新」，但不吃 auto 边距 */
+.node-badge {
+  flex: none;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  padding: 0 4px;
+}
 
 .node-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .node-role { font-size: 11px; color: var(--text-3); letter-spacing: .02em; }
@@ -447,6 +460,17 @@ body {
 .msg--user .bubble { background: var(--raised); border-color: var(--line-2); }
 .msg--user .bubble p:first-child { margin-top: 0; }
 .msg--error .bubble { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); color: var(--danger); }
+
+/* 压缩点：左边一条实线，跟正文和其他折叠块区分开 */
+.msg--compaction .thinking { border-style: solid; border-left: 2px solid var(--accent); color: var(--text-2); }
+.msg--compaction .bubble { margin-top: 6px; }
+
+/* 已压缩：留在原位但变暗 —— 只还在文件里，不再发给模型 */
+.msg.is-folded { opacity: .55; }
+
+/* 折叠分隔线：上面那些已折进摘要 */
+.fold-line { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 11px; }
+.fold-line::before, .fold-line::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 
 /* 保留换行：模型输出的行是它自己排好的，软换成一段反而更难读 */
 .bubble p { margin: 0 0 8px; white-space: pre-wrap; }

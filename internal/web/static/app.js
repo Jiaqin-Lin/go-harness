@@ -2,7 +2,7 @@
 // 只有流式那一轮走增量（见 dom.live / state.streaming）
 
 import { getJSON, request, streamChat } from './api.js';
-import { renderMessage, updateMessage } from './chat.js';
+import { renderMessage, renderCompaction, updateMessage } from './chat.js';
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
 import { summarise, clip, numTokens } from './shared.js';
@@ -308,19 +308,40 @@ function entryById(id) {
   return state.entries.find((entry) => entry.id === id);
 }
 
-// pathEntries 是「根 → 选中节点」这一条路径：右栏只显示它。
-// 树上别的支路不进来 —— 那正是分叉互不影响的含义
-function pathEntries() {
-  if (!state.selected) return [];
+// pathTo 是「根 → entryId」这一条路径：右栏画选中节点那条，图上标折叠用的是
+// 叶子那条（「模型现在看不看得到」看的是叶子）。树上别的支路不进来 ——
+// 那正是分叉互不影响的含义
+function pathTo(entryId) {
+  if (!entryId) return [];
   const byId = new Map(state.entries.map((entry) => [entry.id, entry]));
   const path = [];
-  for (let id = state.selected, guard = 0; id && guard < 10000; guard++) {
+  for (let id = entryId, guard = 0; id && guard < 10000; guard++) {
     const entry = byId.get(id);
     if (!entry) break;
     path.push(entry);
     id = entry.parentId || null;
   }
   return path.reverse();
+}
+
+function pathEntries() {
+  return pathTo(state.selected);
+}
+
+// foldedSet 是路径上不再进上下文的 entry：最后一个压缩点之前的历史全算
+// （firstKeptEntryId 以前的，连同更早的压缩点），规则照抄 Session.contextPath
+function foldedSet(path) {
+  const folded = new Set();
+  let last = -1;
+  path.forEach((entry, i) => { if (entry.compaction) last = i; });
+  if (last < 0) return folded; // 路径上没有压缩点 = 一条都没折
+  const firstKept = path[last].compaction.firstKeptEntryId;
+  let kept = false;
+  path.slice(0, last).forEach((entry) => {
+    if (entry.id === firstKept) kept = true;
+    if (!kept || entry.compaction) folded.add(entry.id);
+  });
+  return folded;
 }
 
 // ── 渲染 ─────────────────────────────────────────────────
@@ -373,6 +394,9 @@ function graphModel() {
     children.get(entry.parentId).push(entry);
   }
 
+  // 哪几轮不再进上下文：按叶子路径算 —— 图回答的是「模型现在看不看得到」
+  const folded = foldedSet(pathTo(state.leafId));
+
   const owner = new Map();
   const nodes = [];
 
@@ -402,6 +426,9 @@ function graphModel() {
       parentId: parent ? owner.get(parent) || null : null,
       message: entry.message, // 节点上显示的是你问的那句
       stopReason: end.message?.stopReason || '', // 中止/出错标在节点角上
+      // 按用户消息判断：切点可以落在 assistant 上，那一轮问题被折、回答还在，
+      // 图上显示的就是问题
+      folded: folded.has(entry.id),
     });
   }
   return { nodes, owner };
@@ -420,7 +447,14 @@ function turnLabel(entryId) {
 
 function renderChat() {
   const path = pathEntries();
-  const nodes = path.map((entry) => renderMessage(entry.message || {}));
+  const folded = foldedSet(path);
+  // 折叠段是路径的前缀（firstKeptEntryId 自己永远进上下文），所以第一条还进
+  // 上下文的 entry 的下标就是被折掉的条数，也就是分隔线的落点
+  const cut = path.findIndex((entry) => !folded.has(entry.id));
+  const nodes = path.map((entry) => (entry.compaction
+    ? renderCompaction(entry, { folded: folded.has(entry.id) })
+    : renderMessage(entry.message || {}, { folded: folded.has(entry.id) })));
+  if (cut > 0) nodes.splice(cut, 0, foldLine(cut));
   withPin(() => {
     dom.history.replaceChildren(...nodes);
     if (!path.length && !state.sessionId) {
@@ -445,7 +479,8 @@ function pathSummary(path) {
     if (entry.message?.usage) last = entry.message.usage;
   }
 
-  const parts = [`${path.length} 条消息`];
+  // 压缩点不是消息：它没有正文，进上下文的是一条现造的摘要
+  const parts = [`${path.filter((entry) => entry.message).length} 条消息`];
   if (last) {
     const used = numTokens(last.input + last.output);
     parts.push(`上下文 ${used}${state.contextWindow ? ` / ${numTokens(state.contextWindow)}` : ''}`);
@@ -561,6 +596,9 @@ async function send() {
 
 function handleEvent(event) {
   switch (event.type) {
+    case 'compacting':
+      showConnecting('正在压缩上下文…');
+      break;
     case 'turn_start':
       showConnecting();
       break;
@@ -618,13 +656,17 @@ function queueRender() {
   });
 }
 
-// 发出去到模型开始吐字之间有一段空档（推理模型首 token 要等好几秒），
-// 先放一行字，别让右栏看着像没反应
-function showConnecting() {
-  if (state.streaming || state.connecting) return;
+// 发出去到模型开始吐字之间有一段空档（推理模型首 token 要等好几秒，
+// 压缩上下文还要先花一次调用），先放一行字，别让右栏看着像没反应
+function showConnecting(text = '正在连接模型…') {
+  if (state.streaming) return;
+  if (state.connecting) {
+    state.connecting.textContent = text;
+    return;
+  }
   const element = document.createElement('div');
   element.className = 'chat-empty';
-  element.textContent = '正在连接模型…';
+  element.textContent = text;
   withPin(() => dom.live.append(element));
   state.connecting = element;
 }
@@ -710,6 +752,9 @@ function adoptEntry(entry) {
     live.el.dataset.entryId = entry.id;
     updateMessage(live.el, entry.message || {}, {});
     dom.history.append(live.el);
+  } else if (entry.compaction) {
+    // 压缩点没有正文，画的是一段摘要
+    dom.history.append(renderCompaction(entry));
   } else {
     dom.history.append(renderMessage(entry.message || {}));
   }
@@ -926,6 +971,14 @@ function span(className, text) {
   node.className = className;
   node.textContent = text;
   return node;
+}
+
+// foldLine 是折叠段和还在上下文里的那段之间的分隔线：上面正好 count 条是折的
+function foldLine(count) {
+  const line = document.createElement('div');
+  line.className = 'fold-line';
+  line.textContent = `以上 ${count} 条已折叠`;
+  return line;
 }
 
 

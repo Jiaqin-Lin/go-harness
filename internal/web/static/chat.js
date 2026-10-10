@@ -3,17 +3,48 @@
 
 import { roleLabel, argsPreview, clip, numTokens } from './shared.js';
 
-export function renderMessage(msg, { streaming = false } = {}) {
+export function renderMessage(msg, { streaming = false, folded = false } = {}) {
   const el = document.createElement('div');
-  updateMessage(el, msg, { streaming });
+  updateMessage(el, msg, { streaming, folded });
+  return el;
+}
+
+// renderCompaction 画压缩点：这一刀把之前的历史折成了摘要。默认折起来 ——
+// 摘要是给模型看的检查点，摆在这儿是给「从哪儿开始重放」一个交代
+export function renderCompaction(entry, { folded = false } = {}) {
+  const el = document.createElement('div');
+  el.className = 'msg msg--compaction' + (folded ? ' is-folded' : '');
+
+  const head = document.createElement('div');
+  head.className = 'msg-head';
+  const role = document.createElement('span');
+  role.className = 'msg-role';
+  role.textContent = '上下文压缩';
+  const usage = document.createElement('span');
+  usage.className = 'msg-usage';
+  usage.textContent = `压缩前 ${numTokens(entry.compaction.tokensBefore)}`;
+  head.append(role, usage);
+  // 被更新的摘要取代的旧卡片自己也已折进新摘要
+  if (folded) head.append(foldedNote());
+
+  const details = document.createElement('details');
+  details.className = 'thinking';
+  const summary = document.createElement('summary');
+  summary.textContent = '之前的对话折成了这段摘要';
+  const body = document.createElement('div');
+  body.className = 'bubble';
+  body.append(markdown(entry.compaction.summary));
+  details.append(summary, body);
+
+  el.append(head, details);
   return el;
 }
 
 // updateMessage 整条重画：头（角色 / 用量 / 中止标记）和体都重建。
 // 流式那几帧会反复调它，而用量、中止标记、错误边框都是落盘之后才有的东西 ——
 // 只在建元素时算一次的话，这一轮刚跑完就是错的，得刷新页面才对
-export function updateMessage(el, msg, { streaming = false } = {}) {
-  el.className = `msg msg--${messageKind(msg)}`;
+export function updateMessage(el, msg, { streaming = false, folded = false } = {}) {
+  el.className = `msg msg--${messageKind(msg)}` + (folded ? ' is-folded' : '');
 
   const head = document.createElement('div');
   head.className = 'msg-head';
@@ -36,11 +67,21 @@ export function updateMessage(el, msg, { streaming = false } = {}) {
     note.textContent = msg.stopReason === 'aborted' ? '已中止' : '出错了';
     head.append(note);
   }
+  // 被折掉的 entry 留在原位、变暗，但得说清它只还在文件里
+  if (folded) head.append(foldedNote());
 
   const body = document.createElement('div');
   body.className = 'msg-body';
   fillBody(body, msg, streaming);
   el.replaceChildren(head, body);
+}
+
+// foldedNote 是「这条只在文件里、不再进上下文」那个小标记
+function foldedNote() {
+  const note = document.createElement('span');
+  note.className = 'msg-note';
+  note.textContent = '已压缩 · 不再进上下文';
+  return note;
 }
 
 function messageKind(msg) {

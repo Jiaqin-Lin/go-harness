@@ -51,6 +51,21 @@ func (s *Session) Append(msg *types.Message) (string, error) {
 // 空 parentID = 挂成根，只允许用在还没有任何 entry 的新会话上 —— 允许往中间
 // 挂空的会多出第二个根，图布局和「根到某节点」两个假设会一起破
 func (s *Session) AppendAfter(parentID string, msg *types.Message) (string, error) {
+	return s.append(parentID, &Entry{Type: messageType, Message: msg})
+}
+
+// AppendCompaction 追加一条 compaction：firstKeptEntryID 之前的历史已经折叠进
+// summary。它跟消息一样挂在树上，之后的轮次就从它下面接着长
+func (s *Session) AppendCompaction(parentID, summary, firstKeptEntryID string, tokensBefore int) (string, error) {
+	return s.append(parentID, &Entry{
+		Type:             compactionType,
+		Summary:          summary,
+		FirstKeptEntryID: firstKeptEntryID,
+		TokensBefore:     tokensBefore,
+	})
+}
+
+func (s *Session) append(parentID string, entry *Entry) (string, error) {
 	if parentID == "" {
 		if len(s.entries) > 0 {
 			return "", errors.New("会话已经有内容了，新消息得挂在某个 entry 下面")
@@ -61,7 +76,8 @@ func (s *Session) AppendAfter(parentID string, msg *types.Message) (string, erro
 		return "", fmt.Errorf("父节点 %s 不在这个会话里", parentID)
 	}
 
-	entry := &Entry{Type: messageType, ID: newID(s.byId), Timestamp: timestampNow(), Message: msg}
+	entry.ID = newID(s.byId)
+	entry.Timestamp = timestampNow()
 	if parentID != "" {
 		parent := parentID
 		entry.ParentID = &parent
@@ -85,26 +101,91 @@ func (s *Session) AppendAfter(parentID string, msg *types.Message) (string, erro
 
 // Messages 是给模型看的历史：从当前叶子沿 parentId 回溯到根
 func (s *Session) Messages() []*types.Message {
-	return messagesOf(s.pathTo(s.leafID))
+	return s.MessagesAt(s.leafID)
 }
 
 // MessagesAt 是从根到 entryID 这条路径上的消息，也就是「点这个 entry 继续
 // 对话」时该发给模型的历史 —— 旁边的支路在树上，但不在路径里。
 //
+// 路径上有 compaction 时，它把 firstKeptEntryID 之前的历史折成一条摘要消息。
+// 那些 entry 还在文件里、还在图上，只是不进上下文
+//
 // entryID 不在树上时返回空（pathTo 遇到不认识的节点就停）。调用方得先确认
 // 这个节点存在，否则模型会拿到一份「没有任何历史」的请求白跑一轮
 func (s *Session) MessagesAt(entryID string) []*types.Message {
-	return messagesOf(s.pathTo(entryID))
+	return messagesOf(s.contextPath(entryID))
 }
+
+// ContextEntries 是路径上真正进上下文的那一段。返回的 entry 跟 MessagesAt 的
+// 消息一一对应：消息 entry 出一条消息，compaction entry 出摘要那一条 ——
+// 压缩时靠这个对应关系把「保留段第一条」换回 firstKeptEntryID
+func (s *Session) ContextEntries(entryID string) []*Entry {
+	return s.contextPath(entryID)
+}
+
+// LastSummaryAt 是路径上最后一个 compaction 的摘要，没有就是空串。
+// 再次压缩时拿它做增量更新：新内容并进旧摘要，不是各写一份
+func (s *Session) LastSummaryAt(entryID string) string {
+	for _, entry := range slices.Backward(s.pathTo(entryID)) {
+		if entry.Type == compactionType {
+			return entry.Summary
+		}
+	}
+	return ""
+}
+
+// contextPath 是路径上真正进上下文的那一段：最后一个 compaction 自己，
+// 加上从 firstKeptEntryID 起（含）到它为止的 entry，再加上它之后的
+func (s *Session) contextPath(entryID string) []*Entry {
+	path := s.pathTo(entryID)
+
+	last := -1
+	for i, entry := range path {
+		if entry.Type == compactionType {
+			last = i
+		}
+	}
+	if last < 0 {
+		return path
+	}
+
+	context := []*Entry{path[last]}
+	kept := false
+	for _, entry := range path[:last] {
+		if entry.ID == path[last].FirstKeptEntryID {
+			kept = true
+		}
+		// 更早的 compaction 已经被新的摘要覆盖，不能再贡献一条摘要
+		if kept && entry.Type != compactionType {
+			context = append(context, entry)
+		}
+	}
+	return append(context, path[last+1:]...)
+}
+
+const summaryPrefix = "在此之前的对话已经压缩成下面这段摘要：\n\n<summary>\n"
+const summarySuffix = "\n</summary>"
 
 func messagesOf(entries []*Entry) []*types.Message {
 	var messages []*types.Message
 	for _, entry := range entries {
-		if entry.Message != nil {
+		switch {
+		case entry.Message != nil:
 			messages = append(messages, entry.Message)
+		case entry.Type == compactionType:
+			messages = append(messages, summaryMessage(entry))
 		}
 	}
 	return messages
+}
+
+// summaryMessage 把摘要拼成一条 user 消息。摘要不落盘成消息 ——
+// 它存在 compaction entry 里，每次投影现造
+func summaryMessage(entry *Entry) *types.Message {
+	return &types.Message{
+		Role:          types.UserRole,
+		ContentBlocks: []types.ContentBlock{types.NewTextBlock(summaryPrefix + entry.Summary + summarySuffix)},
+	}
 }
 
 // pathTo 沿 parentId 从 entryID 回溯到根再反转。树只在这里摊平成一条路径，

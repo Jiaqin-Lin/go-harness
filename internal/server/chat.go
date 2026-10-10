@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/reuben/go-harness/internal/compact"
 	"github.com/reuben/go-harness/internal/core"
 	"github.com/reuben/go-harness/internal/prompts"
+	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/session"
 	"github.com/reuben/go-harness/internal/tools"
 	"github.com/reuben/go-harness/internal/types"
@@ -131,6 +133,11 @@ func (s *Server) handleChatAbort(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session.Session, parentID, text string) {
 	cwd := sess.Cwd()
 	allTools := tools.GetAllTools(cwd)
+
+	// 顶到窗口阈值就先压缩。压出来的 compaction 挂在分支点上，这一轮从它
+	// 下面接着长 —— 之后的历史都从这个节点开始重放
+	parentID = s.compactIfNeeded(ctx, stream, sess, parentID)
+
 	conversation := &types.Conversation{
 		SystemPrompt: prompts.BuildSystemPrompt(cwd, allTools),
 		Tools:        allTools,
@@ -164,6 +171,52 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 
 	// 标题是后台生成、写 sidecar 的，不占这条流：前端过几秒自己再拉一次侧栏
 	s.maybeTitle(sess)
+}
+
+// compactIfNeeded 在上下文顶到阈值时先压一次，返回这一轮该挂在哪个 entry 下面
+// （压了就返回 compaction entry，没压原样返回）。
+//
+// 压缩失败只报一声就接着跑：它是省钱的优化，不是这一轮能不能跑的前提
+func (s *Server) compactIfNeeded(ctx context.Context, stream *eventStream, sess *session.Session, parentID string) string {
+	messages := sess.MessagesAt(parentID)
+	settings := compact.DefaultSettings()
+	if !compact.ShouldCompact(compact.ContextTokens(messages), provider.ContextWindow(s.cfg.Model), settings) {
+		return parentID
+	}
+
+	// 有上一个摘要时 messages[0] 就是它：这一刀只摘要它后面的新内容，
+	// 新旧两版交给模型合并
+	start := 0
+	prevSummary := sess.LastSummaryAt(parentID)
+	if prevSummary != "" {
+		start = 1
+	}
+
+	entries := sess.ContextEntries(parentID)
+	cut := compact.FindCut(messages, start, settings.KeepRecentTokens)
+	if cut < 0 || cut >= len(entries) {
+		return parentID
+	}
+
+	stream.send(wireEvent{Type: "compacting"})
+	summary, err := compact.Summarize(ctx, s.cfg.Generate, messages[start:cut], prevSummary, settings)
+	if err != nil {
+		// 点了停止：这一轮本来就跑不成了，取消不该报成压缩失败
+		if ctx.Err() != nil {
+			return parentID
+		}
+		stream.send(wireEvent{Type: "error", Error: fmt.Sprintf("上下文没压成，这一轮带着原样的历史跑：%v", err)})
+		return parentID
+	}
+
+	id, err := sess.AppendCompaction(parentID, summary, entries[cut].ID, compact.ContextTokens(messages))
+	if err != nil {
+		stream.send(wireEvent{Type: "error", Error: fmt.Sprintf("压缩没存上：%v", err)})
+		return parentID
+	}
+	entry := toEntryDTO(sess.Entry(id))
+	stream.send(wireEvent{Type: "entry", Entry: &entry})
+	return id
 }
 
 // openOrCreate 按 id 打开会话；文件不存在就是这个 id 的草稿还没落过盘。
