@@ -2,9 +2,11 @@
 // 只有流式那一轮走增量（见 dom.live / state.streaming）
 
 import { getJSON, request, streamChat } from './api.js';
-import { renderMessage, renderCompaction, updateMessage } from './chat.js';
+import { renderMessage, renderCompaction, updateMessage, setSkillPaths } from './chat.js';
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
+import { SkillMenu, SkillsModal } from './skills.js';
+import { SettingsModal } from './settings.js';
 import { summarise, clip, numTokens } from './shared.js';
 
 const el = (id) => document.getElementById(id);
@@ -31,6 +33,10 @@ const dom = {
   send: el('composer-send'),
   stop: el('composer-stop'),
   hint: el('composer-hint'),
+  skillPick: el('skill-pick'),
+  skillChip: el('skill-chip'),
+  skillMenu: el('skill-menu'),
+  skillsModal: el('skills'),
   remove: el('session-delete'),
   splitterSidebar: el('splitter-sidebar'),
   splitterChat: el('splitter-chat'),
@@ -52,6 +58,7 @@ const state = {
   pendingBranch: null, // 「+ 建出来的新分支」挂在哪条 entry 下面；非 null 时输入框才对着这条新支路
   busy: false,
   abort: null,
+  skillChip: null,   // 这一轮强制要用的技能名；只对下一条消息生效，发出去就清
   live: [],          // 这一轮已经画出来、还没落盘的消息
   streaming: null,   // 正在长的那个元素
   connecting: null,  // 「正在连接模型…」那行占位
@@ -60,6 +67,8 @@ const state = {
   streamError: '',   // 流里报的错，收尾时再显示
   stopping: false,   // 用户点过停止（跟「连接断了」不是一回事）
   contextWindow: 0,  // 模型的上下文窗口，启动时问 /api/meta（拿不到就 0 = 不显示分母）
+  compactAt: 0,      // 设置里那个压缩触发点（0 = 没设过、用默认）
+  compactLimit: 0,   // 实际会触发的数，服务端算好给的（不压是 0）
   // 布局偏好：拖过的栏宽（px，null = 还没拖过、用 CSS 默认）和栏的显隐
   sidebarW: null,
   chatW: null,
@@ -75,6 +84,66 @@ const graph = new Graph({
   onSelect: (id) => selectEntry(id),
   onBranch: (id) => branchFrom(id),
 });
+
+const skillsMenu = new SkillMenu({
+  root: dom.skillMenu,
+  onPick: (name) => {
+    state.skillChip = name;
+    renderComposer();
+  },
+  onManage: () => skillsModal.open(state.cwd),
+});
+
+// refreshSkillPaths 把「SKILL.md 路径 → 技能名」喂给 chat.js，模型 read 技能时
+// 界面才认得出来。读不到就当没装技能：退回普通工具行，不影响别的。
+//
+// 技能是磁盘上的目录，用户完全可以绕过界面直接往 skills/ 里放一份——所以这张表
+// 不能只在装东西的时候刷：开页面、开一轮、管理界面里动过之后都得重来一遍
+async function refreshSkillPaths(cwd = state.cwd) {
+  if (!cwd) {
+    setSkillPaths(new Map());
+    return;
+  }
+  try {
+    const data = await getJSON(`/api/skills?cwd=${encodeURIComponent(cwd)}`);
+    setSkillPaths(new Map((data.skills || []).map((s) => [s.path, s.name])));
+  } catch {
+    setSkillPaths(new Map());
+  }
+  // 表是后到的，历史是先画的：不重画一遍，已经显示出来的 read 行永远认不出来
+  renderChat();
+}
+
+const skillsModal = new SkillsModal({
+  root: dom.skillsModal,
+  // 停用/删掉的可能正是 chip 上选的那一个：选中的技能不生效了，chip 就得撤掉。
+  // 顺带重拉一次路径表：刚装/刚删的技能，历史记录里的标记也得跟着变
+  onChanged: async () => {
+    refreshSkillPaths();
+    if (!state.skillChip || !state.cwd) return;
+    let usable = [];
+    try {
+      const data = await getJSON(`/api/skills?cwd=${encodeURIComponent(state.cwd)}`);
+      usable = (data.skills || []).filter((s) => s.enabled && !s.shadowed && !s.error);
+    } catch {
+      /* 读不到就当它还可用，服务端那边还会再校一次 */
+    }
+    if (!usable.some((s) => s.name === state.skillChip)) {
+      state.skillChip = null;
+      renderComposer();
+    }
+  },
+});
+
+const settingsModal = new SettingsModal({
+  root: el('settings'),
+  onSaved: (meta) => {
+    applyMeta(meta);
+    renderChat(); // 右栏那行「上下文 x / 压缩线 y」跟着变
+  },
+});
+
+el('open-settings').addEventListener('click', () => settingsModal.open({ compactAt: state.compactAt }));
 
 const picker = new DirPicker({
   root: el('dirpicker'),
@@ -213,7 +282,9 @@ function toggleProject(project) {
 function newSession(cwd, openSidebar = false) {
   if (state.busy) return; // 跑着一轮的时候换会话，事件会灌进新会话里
   if (openSidebar) state.open.add(cwd);
+  if (state.cwd !== cwd) state.skillChip = null; // 技能是按项目扫的，换项目别把上一个项目的选择带过来
   state.cwd = cwd;
+  refreshSkillPaths(cwd);
   state.sessionId = newSessionID();
   state.draft = true;
   state.title = '';
@@ -243,6 +314,12 @@ async function openSession(cwd, id, entryId = null) {
     return;
   }
 
+  if (state.cwd !== cwd) {
+    state.skillChip = null; // 同上：技能是跟着项目走的
+    // 等技能表到齐再画：不然打开一个用过技能的历史会话，那几行会先闪一下普通
+    // 工具行的样子（表是异步来的，历史是当场画的）
+    await refreshSkillPaths(cwd);
+  }
   state.cwd = cwd;
   state.sessionId = id;
   state.draft = false;
@@ -394,8 +471,15 @@ function graphModel() {
     children.get(entry.parentId).push(entry);
   }
 
-  // 哪几轮不再进上下文：按叶子路径算 —— 图回答的是「模型现在看不看得到」
-  const folded = foldedSet(pathTo(state.leafId));
+  // 哪几轮不再进上下文：只用来把那些轮画暗一点，不挂角标（角标只留给树上的
+  // 事实，见 graph.js）。基准跟右栏的历史同一套 —— 你选中的那条线，
+  // 没选就是当前边上的叶子。灰的含义是「在你正看的这条线上被折掉了」，
+  // 右栏的折线讲的是同一件事，两个视图对不上就没法看了
+  const viewed = state.selected || state.leafId;
+  const path = pathTo(viewed);
+  const folded = foldedSet(path);
+  // 看的这条线上的 entry，用来看某一轮在不在线上（见下面 folded 的判法）
+  const onViewPath = new Set(path.map((entry) => entry.id));
 
   const owner = new Map();
   const nodes = [];
@@ -427,8 +511,14 @@ function graphModel() {
       message: entry.message, // 节点上显示的是你问的那句
       stopReason: end.message?.stopReason || '', // 中止/出错标在节点角上
       // 按用户消息判断：切点可以落在 assistant 上，那一轮问题被折、回答还在，
-      // 图上显示的就是问题
-      folded: folded.has(entry.id),
+      // 图上显示的就是问题。
+      //
+      // 灰得同时满足两个条件：这一轮有一步在看的这条线上，且那一步被折了。
+      // 「不在这一条线上」和「被压缩折掉」是两回事 —— 往下的路在别处接着长的
+      // 轮次不属于现在这条线，把它画灰会让人以为它曾经在上下文里；
+      // 而压缩点常常正好挂在上一轮的末尾，只看轮次结尾（end）会把
+      // 「root 连同它那段历史一起被压掉」漏判成亮的
+      folded: steps.some((s) => onViewPath.has(s.id) && folded.has(s.id)), // 只决定画不画暗，不挂角标
     });
   }
   return { nodes, owner };
@@ -453,7 +543,7 @@ function renderChat() {
   const cut = path.findIndex((entry) => !folded.has(entry.id));
   const nodes = path.map((entry) => (entry.compaction
     ? renderCompaction(entry, { folded: folded.has(entry.id) })
-    : renderMessage(entry.message || {}, { folded: folded.has(entry.id) })));
+    : renderMessage(entry.message || {}, { folded: folded.has(entry.id), skill: entry.skill })));
   if (cut > 0) nodes.splice(cut, 0, foldLine(cut));
   withPin(() => {
     dom.history.replaceChildren(...nodes);
@@ -483,7 +573,8 @@ function pathSummary(path) {
   const parts = [`${path.filter((entry) => entry.message).length} 条消息`];
   if (last) {
     const used = numTokens(last.input + last.output);
-    parts.push(`上下文 ${used}${state.contextWindow ? ` / ${numTokens(state.contextWindow)}` : ''}`);
+    // 分母给压缩线而不是模型窗口：真正决定「什么时候会压」的是它（见 compact.Limit）
+    parts.push(`上下文 ${used}${state.compactLimit ? ` / 压缩线 ${numTokens(state.compactLimit)}` : ''}`);
     if (last.input > 0) parts.push(`缓存 ${Math.round((last.cached / last.input) * 100)}%`);
   }
   return parts.join(' · ');
@@ -496,6 +587,11 @@ function renderComposer() {
   dom.stop.hidden = !state.busy;
   dom.remove.hidden = state.draft || !state.sessionId;
   dom.hint.textContent = state.busy ? '正在跑…' : branchHint();
+
+  // 技能按钮只看 cwd：还没选会话时也得能进管理界面（管理弹窗按 cwd 走，跟会话无关）
+  dom.skillPick.disabled = !state.cwd;
+  dom.skillChip.hidden = !state.skillChip;
+  if (state.skillChip) dom.skillChip.querySelector('.skill-chip-label').textContent = state.skillChip;
 }
 
 // sendParent 是「这一句接在哪儿」：只有两个地方能接 —— 当前的 tip（接着往下说）、
@@ -526,14 +622,18 @@ async function send() {
   const parent = sendParent();
   if (!text || state.busy || !state.sessionId || parent === null) return;
 
+  refreshSkillPaths(); // 手工丢进 skills/ 的技能，这一轮就该认得出来（不等它，回来会重画）
   const entriesBefore = state.entries.length;
+  const skill = state.skillChip; // 只对这一句生效：发出去就把 chip 清掉
   state.sawDone = false;
   state.streamError = '';
   state.stopping = false;
+  state.skillChip = null;
 
-  // 先把用户这句画上去；服务端落盘之后发 entry 事件来认领它（见 adoptEntry）
+  // 先把用户这句画上去；服务端落盘之后发 entry 事件来认领它（见 adoptEntry）。
+  // 技能名跟着一起画：不用等落盘回来，选中过就该在气泡旁边看得见
   const userMsg = { role: 'user', blocks: [{ kind: 'text', text }] };
-  const userEl = renderMessage(userMsg);
+  const userEl = renderMessage(userMsg, { skill });
   withPin(() => dom.live.append(userEl));
   state.live.push({ el: userEl, msg: userMsg });
 
@@ -547,7 +647,7 @@ async function send() {
   let failure = '';
   try {
     await streamChat(
-      { cwd: state.cwd, sessionId: state.sessionId, parentId: parent, text },
+      { cwd: state.cwd, sessionId: state.sessionId, parentId: parent, text, skill: skill || undefined },
       handleEvent,
       controller.signal,
     );
@@ -576,10 +676,11 @@ async function send() {
   }
 
   // 一句话都没落盘（409、连不上、还没跑就断了）：把打的字还回输入框，
-  // 别让人重打一遍
+  // 别让人重打一遍。技能选择也一样还回去 —— 被一次连不上吃掉太亏
   if (!stopped && state.entries.length === entriesBefore && text && !dom.input.value.trim()) {
     dom.input.value = text;
     autoGrow();
+    if (skill && !state.skillChip) state.skillChip = skill;
   }
 
   if (failure) showError(failure);
@@ -750,13 +851,13 @@ function adoptEntry(entry) {
   const stay = pinned();
   if (live) {
     live.el.dataset.entryId = entry.id;
-    updateMessage(live.el, entry.message || {}, {});
+    updateMessage(live.el, entry.message || {}, { skill: entry.skill });
     dom.history.append(live.el);
   } else if (entry.compaction) {
     // 压缩点没有正文，画的是一段摘要
     dom.history.append(renderCompaction(entry));
   } else {
-    dom.history.append(renderMessage(entry.message || {}));
+    dom.history.append(renderMessage(entry.message || {}, { skill: entry.skill }));
   }
   if (stay) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
 
@@ -818,6 +919,17 @@ dom.stop.addEventListener('click', async () => {
     state.abort?.abort(); // 连端点都够不着了，只能把这条连接掐掉
   }
 });
+// 技能菜单挂在这一行：选中的技能只对下一条消息生效，所以没选会话（还没定 cwd）时
+// 按钮是灰的，但管理弹窗在选定了项目、还没有会话的时候就该能进
+dom.skillPick.addEventListener('click', () => {
+  if (state.cwd) skillsMenu.toggle(state.cwd);
+});
+dom.skillChip.addEventListener('click', (event) => {
+  if (!event.target.closest('.skill-chip-x')) return; // 点 chip 正文不开菜单，只有 × 有用
+  state.skillChip = null;
+  renderComposer();
+});
+
 el('graph-fit').addEventListener('click', () => graph.fit());
 
 el('session-delete').addEventListener('click', async () => {
@@ -1012,14 +1124,19 @@ function withPin(mutate) {
 
 // ── 起步 ─────────────────────────────────────────────────
 
-// 模型信息（上下文窗口多大）。拉不到就算了，右栏那行字少个分母而已
+// 模型信息：窗口多大、压缩线在哪。拉不到就算了，右栏那行字少个分母而已
 async function loadMeta() {
   try {
-    const meta = await getJSON('/api/meta');
-    state.contextWindow = meta.contextWindow || 0;
+    applyMeta(await getJSON('/api/meta'));
   } catch {
-    state.contextWindow = 0;
+    applyMeta(null);
   }
+}
+
+function applyMeta(meta) {
+  state.contextWindow = meta?.contextWindow || 0;
+  state.compactAt = meta?.compactAt || 0;
+  state.compactLimit = meta?.compactLimit || 0;
 }
 
 loadLayout();

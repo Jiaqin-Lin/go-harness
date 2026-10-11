@@ -30,6 +30,10 @@ type stubLLM struct {
 
 	summary string       // 压缩调用的答复
 	usage   *types.Usage // 每次答复带的用量，nil 就用默认的小数字
+
+	// systems 记的是带工具那些调用的 system prompt —— 技能、AGENTS.md 的注入
+	// 就发生在这一层，只能从这儿断言
+	systems []string
 }
 
 // isSummarizationCall 认的是调用形状而不是第几次调用：标题生成也走这个桩，
@@ -56,6 +60,7 @@ func (s *stubLLM) generate(ctx context.Context, conversation types.Conversation)
 	// 记进来会把对话历史的断言搅乱
 	if len(conversation.Tools) > 0 {
 		s.seen = append(s.seen, conversation.Messages)
+		s.systems = append(s.systems, conversation.SystemPrompt)
 	}
 	gate := s.gate
 	s.mu.Unlock()
@@ -90,6 +95,23 @@ func (s *stubLLM) histories() [][]*types.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.seen)
+}
+
+// lastSystemPrompt 拿最近一次带工具的调用收到的 system prompt
+func (s *stubLLM) lastSystemPrompt(t *testing.T) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.systems) == 0 {
+		t.Fatal("还没跑过带工具的调用")
+	}
+	return s.systems[len(s.systems)-1]
+}
+
+func (s *stubLLM) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 // newTestServer 起一个真的 HTTP 服务。SSE 必须走真连接才测得出来：

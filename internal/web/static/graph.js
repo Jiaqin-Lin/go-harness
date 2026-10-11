@@ -232,8 +232,8 @@ export class Graph {
     tag.textContent = STOP_TAG[entry.stopReason] || '';
     head.append(tag);
 
-    // 「已压缩」「压缩点」跟 STOP_TAG 并排 —— 都在说这一轮进不进上下文
-    if (entry.folded) head.append(nodeBadge('已压缩'));
+    // 「压缩点」跟 STOP_TAG 并排。只标这一刀切在哪儿 —— 树上的事实，跟你看哪条支路无关。
+    // 「这一轮还在不在上下文里」不在这里标：那个得看当前这条线，右栏的分隔线在说
     if (entry.compaction) head.append(nodeBadge('压缩点'));
 
     if (leaf) {
@@ -490,7 +490,7 @@ function saveSizes(sessionId, sizes) {
 // 节点角上那个小词：只在「不是正常答完」的时候才有话说
 const STOP_TAG = { tool_use: '调了工具', aborted: '已中止', error: '出错', length: '被截断' };
 
-// nodeBadge 是节点角上的小角标（已压缩 / 压缩点）。不吃 margin-left: auto ——
+// nodeBadge 是节点角上的小角标（现在只剩压缩点）。不吃 margin-left: auto ——
 // 右对齐是「最新」/「+」的位置
 function nodeBadge(text) {
   const badge = document.createElement('span');

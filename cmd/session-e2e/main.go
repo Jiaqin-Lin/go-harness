@@ -21,6 +21,7 @@ import (
 	"github.com/reuben/go-harness/internal/prompts"
 	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/session"
+	"github.com/reuben/go-harness/internal/skills"
 	"github.com/reuben/go-harness/internal/tools"
 	"github.com/reuben/go-harness/internal/types"
 )
@@ -60,9 +61,14 @@ func main() {
 		allTools = nil
 	}
 	conversation := &types.Conversation{
-		SystemPrompt: prompts.BuildSystemPrompt(sess.Cwd(), allTools),
-		Tools:        allTools,
-		Messages:     sess.Messages(),
+		SystemPrompt: prompts.BuildSystemPrompt(prompts.Input{
+			Cwd:      sess.Cwd(),
+			Tools:    allTools,
+			Skills:   skills.Effective(sess.Cwd()),
+			AgentsMD: prompts.ReadAgentsMD(sess.Cwd()),
+		}),
+		Tools:    allTools,
+		Messages: sess.Messages(),
 	}
 	fmt.Printf("== 会话 %s\n== 恢复 %d 条历史，%d 个工具\n", sess.ID(), len(conversation.Messages), len(allTools))
 

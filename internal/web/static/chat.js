@@ -3,9 +3,9 @@
 
 import { roleLabel, argsPreview, clip, numTokens } from './shared.js';
 
-export function renderMessage(msg, { streaming = false, folded = false } = {}) {
+export function renderMessage(msg, { streaming = false, folded = false, skill = '' } = {}) {
   const el = document.createElement('div');
-  updateMessage(el, msg, { streaming, folded });
+  updateMessage(el, msg, { streaming, folded, skill });
   return el;
 }
 
@@ -43,7 +43,7 @@ export function renderCompaction(entry, { folded = false } = {}) {
 // updateMessage 整条重画：头（角色 / 用量 / 中止标记）和体都重建。
 // 流式那几帧会反复调它，而用量、中止标记、错误边框都是落盘之后才有的东西 ——
 // 只在建元素时算一次的话，这一轮刚跑完就是错的，得刷新页面才对
-export function updateMessage(el, msg, { streaming = false, folded = false } = {}) {
+export function updateMessage(el, msg, { streaming = false, folded = false, skill = '' } = {}) {
   el.className = `msg msg--${messageKind(msg)}` + (folded ? ' is-folded' : '');
 
   const head = document.createElement('div');
@@ -52,6 +52,15 @@ export function updateMessage(el, msg, { streaming = false, folded = false } = {
   role.className = 'msg-role';
   role.textContent = roleLabel(msg);
   head.append(role);
+  // 这一轮是用户点了技能发的：技能名落盘在 entry 上，历史重画时也认得出来。
+  // 用 title 而不是多一段文字，是让「选了什么」在头里只占一个角标
+  if (skill) {
+    const used = document.createElement('span');
+    used.className = 'skill-badge skill-badge--used';
+    used.textContent = '技能 ' + skill;
+    used.title = '这一轮指定用这个技能（正文只进了这一轮的 system prompt）';
+    head.append(used);
+  }
   if (msg.usage) {
     // 缓存命中率 = cached / input（DeepSeek 的 prompt_tokens 含命中部分）
     const rate = msg.usage.input > 0 ? `缓存 ${Math.round((msg.usage.cached / msg.usage.input) * 100)}% · ` : '';
@@ -148,6 +157,28 @@ function thinkingBlock(block, streaming) {
   return details;
 }
 
+// skillPaths 是 SKILL.md 绝对路径 → 技能名。技能没有专门的工具，模型用技能就是
+// 一次普通的 read，这张表（app.js 从 /api/skills 灌进来）是界面唯一能认出它的地方
+let skillPaths = new Map();
+
+export function setSkillPaths(map) {
+  skillPaths = map;
+}
+
+// skillRead 认「这次 read 读的是哪个技能」。名字以接口给的为准（frontmatter 里的
+// 名字可能跟目录名不一样）。参数还没流完、路径不全的时候返回 null，退回普通行
+function skillRead(block) {
+  if (block.toolName !== 'read' || !block.args || !skillPaths.size) return null;
+  let path;
+  try {
+    path = JSON.parse(block.args).path;
+  } catch {
+    return null;
+  }
+  const name = typeof path === 'string' ? skillPaths.get(path) : '';
+  return name ? { name, path } : null;
+}
+
 function toolCallBlock(block, { running }) {
   const wrap = document.createElement('div');
   wrap.className = 'tool-call' + (running ? ' is-running' : '');
@@ -155,10 +186,21 @@ function toolCallBlock(block, { running }) {
   line.className = 'tool-line';
   const name = document.createElement('span');
   name.className = 'tool-name';
-  name.textContent = block.toolName || '工具';
   const args = document.createElement('span');
   args.className = 'tool-args';
-  args.textContent = argsPreview(block.toolName, block.args);
+
+  const skill = skillRead(block);
+  if (skill) {
+    // 用技能是件值得看见的事：整行标出来，读的是哪个文件退到悬停里
+    wrap.classList.add('is-skill');
+    name.textContent = '技能';
+    args.textContent = skill.name;
+    args.title = skill.path;
+  } else {
+    name.textContent = block.toolName || '工具';
+    args.textContent = argsPreview(block.toolName, block.args);
+  }
+
   line.append(name, args);
   wrap.append(line);
   return wrap;

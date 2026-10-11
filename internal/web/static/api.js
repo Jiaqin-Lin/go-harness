@@ -1,14 +1,21 @@
 // 跟服务端说话的两种方式：普通 JSON 请求、和一条读到底的 SSE 流
 
 async function failure(res) {
-  // 服务端的错误也是 JSON：{"error": "..."}。解析不出来就退回状态码
+  // 服务端的错误也是 JSON：{"error": "..."}。解析不出来就退回状态码。
+  // 状态码挂在 error 上：有些错（比如装技能撞了 409）要按码分流，不能靠认文案
+  const status = res.status;
   try {
     const body = await res.json();
-    if (body && body.error) return new Error(body.error);
+    if (body && body.error) return withStatus(new Error(body.error), status);
   } catch {
     /* 不是 JSON，走下面的兜底 */
   }
-  return new Error(`${res.status} ${res.statusText}`);
+  return withStatus(new Error(`${status} ${res.statusText}`), status);
+}
+
+function withStatus(err, status) {
+  err.status = status;
+  return err;
 }
 
 async function unwrap(res) {

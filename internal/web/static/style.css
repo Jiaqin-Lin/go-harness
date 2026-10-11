@@ -306,7 +306,7 @@ body {
 /* 被折的轮次：留在图上但变暗 —— 模型已经看不到它了 */
 .node.is-folded:not(.is-selected) { opacity: .55; }
 
-/* 节点角标（已压缩 / 压缩点）：同「最新」，但不吃 auto 边距 */
+/* 节点角标（压缩点）：同「最新」，但不吃 auto 边距 */
 .node-badge {
   flex: none;
   white-space: nowrap;
@@ -512,6 +512,11 @@ body {
   overflow: auto;
   white-space: pre-wrap;
 }
+/* read 到某个 SKILL.md = 模型在用技能：整行换个颜色，别混在普通读文件里 */
+.tool-call.is-skill { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
+.tool-call.is-skill .tool-name,
+.tool-call.is-skill .tool-args { color: var(--accent); }
+
 .tool-call.is-running .tool-name::after {
   content: "";
   display: inline-block;
@@ -550,7 +555,124 @@ body {
 
 /* ── 输入区 ───────────────────────────────────────────── */
 
-.composer { border-top: 1px solid var(--line); padding: 10px 12px 12px; background: var(--surface); }
+/* position: relative 是给技能菜单定位用的，它挂在输入框上方 */
+.composer { position: relative; border-top: 1px solid var(--line); padding: 10px 12px 12px; background: var(--surface); }
+
+/* ── 技能 ─────────────────────────────────────────────── */
+
+.composer-skills { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+
+.skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  padding: 2px 8px;
+  cursor: default;
+}
+.skill-chip-x { color: var(--text-3); cursor: pointer; line-height: 1; }
+.skill-chip-x:hover { color: var(--danger); }
+
+.skill-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% - 6px);
+  z-index: 30;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: 0 14px 34px -18px color-mix(in srgb, var(--sunk) 80%, transparent);
+}
+
+.skill-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.skill-menu-item:hover { background: var(--raised); color: var(--text); }
+.skill-menu-manage { color: var(--text-3); font-size: 12px; }
+
+.skill-text { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.skill-name { font-size: 12.5px; color: var(--text); }
+.skill-desc { flex-basis: 100%; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-path { flex-basis: 100%; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.skill-badge {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+}
+.skill-badge--project { color: var(--accent); border-color: var(--accent-soft); }
+/* 用户气泡头上的「这一轮用了哪个技能」：颜色跟「模型正在用技能」的 is-skill 一套 */
+.skill-badge--used { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); }
+.skill-badge--warn { color: var(--danger); border-color: var(--danger-soft); }
+
+.skill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-md);
+}
+.skill-row:hover { background: var(--raised); }
+.skill-row .skill-text { flex: 1; min-width: 0; }
+.skill-row input[type="checkbox"] { flex: none; accent-color: var(--accent); }
+.skill-row.is-broken .skill-name { color: var(--text-3); text-decoration: line-through; }
+
+/* 技能的两个根目录。用户级和项目级是两处独立的位置，各带各的标签 */
+.skill-roots { display: flex; flex-direction: column; gap: 3px; }
+.skill-root { display: flex; align-items: baseline; gap: 8px; }
+.skill-root-tag { flex: none; width: 3em; color: var(--text-3); }
+.skill-root code { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
+
+.sidebar-actions { display: flex; align-items: center; gap: 2px; }
+
+/* 设置里的一行：标签 + 输入 + 单位 */
+.setting-row { display: flex; align-items: center; gap: 8px; padding: 12px 10px 6px; }
+.setting-label { font-size: 12.5px; color: var(--text); }
+.setting-unit { font-size: 11px; color: var(--text-3); }
+#setting-compact-at {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 6px 8px;
+}
+#setting-compact-at::placeholder { color: var(--text-3); }
+
+.skills-install { display: flex; align-items: center; gap: 6px; }
+#skills-scope {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 4px 6px;
+}
 
 #composer-input {
   display: block;

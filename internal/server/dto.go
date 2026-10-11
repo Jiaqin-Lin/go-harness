@@ -18,6 +18,10 @@ type entryDTO struct {
 	Timestamp string      `json:"timestamp"`
 	Message   *messageDTO `json:"message,omitempty"`
 
+	// Skill 是发这条时用户选的技能名。界面拿它在气泡旁边标一下 ——
+	// 技能正文没落盘，重画历史时只有这个字段能说清「这轮用了什么」
+	Skill string `json:"skill,omitempty"`
+
 	// Compaction 非空说明这个节点是压缩点：它之前的历史已经折进 Summary，
 	// 图上前端把它画成一个能展开的摘要节点
 	Compaction *compactionDTO `json:"compaction,omitempty"`
@@ -57,7 +61,7 @@ type blockDTO struct {
 }
 
 func toEntryDTO(entry *session.Entry) entryDTO {
-	dto := entryDTO{ID: entry.ID, Timestamp: entry.Timestamp}
+	dto := entryDTO{ID: entry.ID, Timestamp: entry.Timestamp, Skill: entry.Skill}
 	if entry.ParentID != nil {
 		dto.ParentID = *entry.ParentID
 	}

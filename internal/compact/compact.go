@@ -41,18 +41,25 @@ func DefaultSettings() Settings {
 	}
 }
 
-// ShouldCompact 说上下文是不是已经顶到该压的位置了：到绝对触发点，或者逼近
-// 窗口（窗口 - reserve），哪个先到算哪个。
-// 窗口未知（0）就不压：没有分母，任何阈值都是瞎猜
-func ShouldCompact(contextTokens, contextWindow int, settings Settings) bool {
+// Limit 是实际会触发的那个数：窗口减掉 reserve（留给下一轮输出和工具结果的余量），
+// 再被绝对触发点压低，哪个小算哪个。<= 0 表示不压。
+//
+// 界面上显示的也是它 —— 显示的数和判断用的数是同一个，就不会各说各话
+func Limit(contextWindow int, settings Settings) int {
 	if contextWindow <= 0 {
-		return false
+		return 0 // 窗口未知：没有分母，任何阈值都是瞎猜
 	}
 	limit := contextWindow - settings.ReserveTokens
 	if settings.CompactAt > 0 && settings.CompactAt < limit {
 		limit = settings.CompactAt
 	}
-	return contextTokens > limit
+	return limit
+}
+
+// ShouldCompact 说上下文是不是已经顶到该压的位置了
+func ShouldCompact(contextTokens, contextWindow int, settings Settings) bool {
+	limit := Limit(contextWindow, settings)
+	return limit > 0 && contextTokens > limit
 }
 
 // ContextTokens 是当前上下文有多大：最后一条报得出用量的 assistant 消息给的

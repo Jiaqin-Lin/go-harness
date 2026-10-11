@@ -15,6 +15,7 @@ import (
 	"github.com/reuben/go-harness/internal/prompts"
 	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/session"
+	"github.com/reuben/go-harness/internal/skills"
 	"github.com/reuben/go-harness/internal/tools"
 	"github.com/reuben/go-harness/internal/types"
 )
@@ -34,6 +35,7 @@ type chatRequest struct {
 	SessionID string `json:"sessionId"`
 	ParentID  string `json:"parentId"` // 分支点；不给就是当前叶子
 	Text      string `json:"text"`
+	Skill     string `json:"skill"` // 这一轮强制用的技能名；空 = 不强制
 }
 
 // handleChat 是唯一的写入口：收一条用户消息、跑一轮、边跑边把事件流出去
@@ -63,6 +65,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	case !isDir(req.Cwd):
 		fail(w, http.StatusBadRequest, "cwd 不是一个目录")
 		return
+	}
+
+	// 强制技能得是这一轮真给模型看得到的那些之一：被停用、被同名盖住、读不出来的
+	// 都不行——强制一个模型根本看不到的技能等于没强制。这一步还在开流之前，
+	// 所以能当普通 HTTP 错误报出去，一个 token 都不花
+	if req.Skill != "" {
+		if _, ok := skills.ByName(req.Cwd, req.Skill); !ok {
+			fail(w, http.StatusBadRequest, "没有叫「%s」的技能，或者它被停用了", req.Skill)
+			return
+		}
 	}
 
 	sess, err := s.openOrCreate(req.Cwd, req.SessionID)
@@ -102,7 +114,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	stream := newEventStream(w)
 
-	s.runTurn(ctx, stream, sess, parentID, text)
+	s.runTurn(ctx, stream, sess, parentID, text, req.Skill)
 }
 
 // handleChatAbort 让正在跑的那一轮停下来。这一轮的收尾（落盘 + done）照跑，
@@ -130,7 +142,7 @@ func (s *Server) handleChatAbort(w http.ResponseWriter, r *http.Request) {
 // runTurn 跑一轮并落盘。ctx 用请求的：关页面、点停止就是取消这一轮，
 // core.Run 在取消路径上会给没跑完的工具调用补配对，所以文件里永远是一整轮。
 // 落盘这一段故意不看 ctx —— 取消了也一样要记住已经跑出来的东西
-func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session.Session, parentID, text string) {
+func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session.Session, parentID, text, skillName string) {
 	cwd := sess.Cwd()
 	allTools := tools.GetAllTools(cwd)
 
@@ -138,10 +150,26 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 	// 下面接着长 —— 之后的历史都从这个节点开始重放
 	parentID = s.compactIfNeeded(ctx, stream, sess, parentID)
 
+	// 强制技能只进这一轮的 system prompt，重放历史的时候它不该再贴一遍，
+	// 这正是「只对下一条消息生效」。handleChat 校验过了，到这儿找不到
+	// 只可能是刚被删/停用——流都开了，报错没意义，当没选就是
+	var forced *skills.Skill
+	if skillName != "" {
+		if sk, ok := skills.ByName(cwd, skillName); ok {
+			forced = &sk
+		}
+	}
+
 	conversation := &types.Conversation{
-		SystemPrompt: prompts.BuildSystemPrompt(cwd, allTools),
-		Tools:        allTools,
-		Messages:     sess.MessagesAt(parentID),
+		SystemPrompt: prompts.BuildSystemPrompt(prompts.Input{
+			Cwd:      cwd,
+			Tools:    allTools,
+			Skills:   skills.Effective(cwd),
+			Forced:   forced,
+			AgentsMD: prompts.ReadAgentsMD(cwd),
+		}),
+		Tools:    allTools,
+		Messages: sess.MessagesAt(parentID),
 	}
 	prompt := &types.Message{Role: types.UserRole, ContentBlocks: []types.ContentBlock{types.NewTextBlock(text)}}
 
@@ -155,8 +183,14 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 	// 一条条挂上去，每条落盘之后往前推一格 —— 前端的图靠 entry 事件长出来。
 	// 第一条挂在分支点上，后面每条挂在前一条下面
 	parent := parentID
-	for _, msg := range newMessages {
-		id, err := sess.AppendAfter(parent, msg)
+	for i, msg := range newMessages {
+		// 技能名只钉在这轮的用户消息上（就是第一条），回答和工具结果不带 ——
+		// 界面只该在「你问的那句」旁边标出这一轮用了什么技能
+		entrySkill := ""
+		if i == 0 {
+			entrySkill = skillName
+		}
+		id, err := sess.AppendAfterSkill(parent, msg, entrySkill)
 		if err != nil {
 			stream.send(wireEvent{Type: "error", Error: fmt.Sprintf("会话没存上：%v", err)})
 			break
@@ -179,7 +213,7 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 // 压缩失败只报一声就接着跑：它是省钱的优化，不是这一轮能不能跑的前提
 func (s *Server) compactIfNeeded(ctx context.Context, stream *eventStream, sess *session.Session, parentID string) string {
 	messages := sess.MessagesAt(parentID)
-	settings := compact.DefaultSettings()
+	settings := s.compactSettings() // 每轮现读设置：改完阈值下一条消息就生效
 	if !compact.ShouldCompact(compact.ContextTokens(messages), provider.ContextWindow(s.cfg.Model), settings) {
 		return parentID
 	}

@@ -13,7 +13,10 @@
   <aside class="sidebar">
     <header class="sidebar-head">
       <span class="wordmark">go-harness</span>
-      <button class="btn btn-ghost btn-icon" id="add-project" title="添加项目目录" aria-label="添加项目目录">+</button>
+      <span class="sidebar-actions">
+        <button class="btn btn-ghost btn-icon" id="open-settings" title="设置" aria-label="设置">⚙</button>
+        <button class="btn btn-ghost btn-icon" id="add-project" title="添加项目目录" aria-label="添加项目目录">+</button>
+      </span>
     </header>
     <nav class="project-list" id="project-list" aria-label="项目与会话"></nav>
     <div class="sidebar-empty" id="sidebar-empty">
@@ -61,6 +64,13 @@
       </div>
 
       <form class="composer" id="composer">
+        <div class="composer-skills">
+          <button type="button" class="btn btn-ghost btn-small" id="skill-pick" title="选一个技能，只对下一条消息生效">技能</button>
+          <button type="button" class="skill-chip" id="skill-chip" hidden title="这一轮必须用这个技能，点 × 取消">
+            <span class="skill-chip-label"></span><span class="skill-chip-x" aria-hidden="true">×</span>
+          </button>
+        </div>
+        <div class="skill-menu" id="skill-menu" hidden></div>
         <textarea id="composer-input" rows="1" placeholder="说点什么，回车发送，Shift+回车换行" aria-label="输入"></textarea>
         <div class="composer-foot">
           <span class="composer-hint" id="composer-hint"></span>
@@ -89,6 +99,56 @@
     <footer class="modal-foot">
       <button class="btn btn-ghost btn-small" id="dirpicker-up">上一层</button>
       <button class="btn btn-primary btn-small" id="dirpicker-pick">选这个目录</button>
+    </footer>
+  </div>
+</div>
+
+<div class="modal" id="settings" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <header class="modal-head">
+      <span id="settings-title">设置</span>
+      <button class="btn btn-ghost btn-icon" id="settings-close" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-body">
+      <div class="setting-row">
+        <span class="setting-label">压缩触发点</span>
+        <input type="number" id="setting-compact-at" min="0" step="1000" placeholder="默认" aria-label="压缩触发点（token）">
+        <span class="setting-unit">token</span>
+      </div>
+      <p class="dir-empty">
+        上下文涨到这个数就先压一次（留空 = 用默认）。保存后下一条消息就生效，不用重启。<br>
+        压得越早越省钱，但模型的原始上下文丢得越多 —— 被压掉的部分只剩摘要。
+      </p>
+    </div>
+    <footer class="modal-foot">
+      <span class="composer-hint" id="settings-note"></span>
+      <button class="btn btn-primary btn-small" id="settings-save">保存</button>
+    </footer>
+  </div>
+</div>
+
+<div class="modal" id="skills" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="skills-title">
+    <header class="modal-head">
+      <span id="skills-title">技能</span>
+      <button class="btn btn-ghost btn-icon" id="skills-close" aria-label="关闭">×</button>
+    </header>
+    <!-- 两个根都列出来：技能分用户级和项目级两处，只露一个的话另一个像不存在 -->
+    <div class="modal-path skill-roots">
+      <span class="skill-root"><span class="skill-root-tag">用户级</span><code id="skills-userdir"></code></span>
+      <span class="skill-root"><span class="skill-root-tag">项目级</span><code id="skills-projdir"></code></span>
+    </div>
+    <div class="modal-body" id="skills-list"></div>
+    <footer class="modal-foot">
+      <span class="skills-install">
+        <select id="skills-scope" aria-label="装到哪一层">
+          <option value="user">用户级</option>
+          <option value="project">项目级</option>
+        </select>
+        <input type="file" id="skills-file" accept=".zip,application/zip" hidden>
+        <button type="button" class="btn btn-ghost btn-small" id="skills-upload">上传 zip</button>
+      </span>
+      <span class="composer-hint" id="skills-note"></span>
     </footer>
   </div>
 </div>

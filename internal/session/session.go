@@ -51,7 +51,13 @@ func (s *Session) Append(msg *types.Message) (string, error) {
 // 空 parentID = 挂成根，只允许用在还没有任何 entry 的新会话上 —— 允许往中间
 // 挂空的会多出第二个根，图布局和「根到某节点」两个假设会一起破
 func (s *Session) AppendAfter(parentID string, msg *types.Message) (string, error) {
-	return s.append(parentID, &Entry{Type: messageType, Message: msg})
+	return s.AppendAfterSkill(parentID, msg, "")
+}
+
+// AppendAfterSkill 跟 AppendAfter 一样，外加记下这一轮强制用的技能名。
+// 技能只对发出去的那一条消息生效，所以这个字段只有那一轮的用户 entry 该带
+func (s *Session) AppendAfterSkill(parentID string, msg *types.Message, skill string) (string, error) {
+	return s.append(parentID, &Entry{Type: messageType, Message: msg, Skill: skill})
 }
 
 // AppendCompaction 追加一条 compaction：firstKeptEntryID 之前的历史已经折叠进

@@ -25,6 +25,49 @@
 
 ---
 
+## 2026-10-11 更新：技能（skills）+ AGENTS.md
+
+**`internal/skills`（新）**：扫描 + frontmatter 解析 + 启停状态 + zip 安装。技能就是「一个目录里有 SKILL.md」，目录里的 scripts/ references/ assets/ 加载阶段不看，模型读 SKILL.md 时自己会找到。
+
+```
+~/.go-harness/skills/<名字>/SKILL.md          用户级
+<项目>/.go-harness/skills/<名字>/SKILL.md      项目级
+~/.go-harness/settings.json                    只记「停用」的那些（没有键 = 启用）
+```
+
+**模型怎么看到技能**：system prompt 里列 `名字: 描述（SKILL.md 绝对路径）`，要用时自己 read —— **没有新增工具**。描述取 frontmatter 的 `description`，没写就取正文第一句；名字没写就用目录名。同名时项目级盖用户级。
+
+**强制使用**：composer 上选一个技能，只对**下一条消息**生效（发出去就清）。选中时该 SKILL.md 的正文整份贴进这一轮 system prompt 的最后一段 —— 不靠模型自觉，也不落进会话文件（重放历史时不会再贴一遍）。校验在开 SSE 流之前做完，未知/停用的技能直接 400，一个 token 都不花。
+
+**热插拔**：system prompt 每轮重建，停用的技能在扫描时就被滤掉，下一轮生效、不用重启、不占上下文。
+
+**管理界面**：输入框上方的「技能」按钮 → 菜单（选技能 / 管理技能…）→ 弹窗里能启停、删除、上传 zip 安装（装到用户级或项目级）。**上传走 base64 塞 JSON**，不是 multipart：`requireJSONForPost` 中间件要求所有 POST 都是 `application/json`，为上传开豁免等于在 CSRF 防线上开口子。
+
+**AGENTS.md**：`<cwd>/AGENTS.md` 存在就整份进 system prompt。只认项目根这一份，不向上找、不看用户级。
+
+**实测撞出来的两条**（都进了测试）：
+
+1. `zip -r` 打的包会给每个目录存一条目录条目（`todo-tool/`），最初按「根下有个散文件」处理，于是好好的包被判成「多个顶层条目」装不上。现在按目录条目算顶层目录，另外「根下就有 SKILL.md」的包一律当平铺包（不剥前缀、名字取文件名）。
+2. 同一份技能在两个 scope 各有一份时，**先滤停用再合并**，顺序反了的话「停用项目级那份」不会露出用户级那份，那个开关就成了死的。
+
+**验证**：`internal/skills` 和 `internal/server` 有单测（假 HOME 隔离，不碰真 `~/.go-harness`）；界面走 headless Chrome + CDP 真点了一遍（选技能 → 发消息断言请求体里带 skill → 弹窗启停 / 装 zip / 删除）；prompt 侧用一个假的 OpenAI 兼容端点把「浏览器 → 服务端 → 真正发给模型的 system prompt」验穿了。`go test ./...` 全绿。
+
+---
+
+## 2026-10-11 更新（二）：压缩阈值变成可配置
+
+**原问题**：`DefaultCompactAt` 是编译进二进制的常量。改它必须重编译 + 换进程，而「换进程没成功」是看不出来的（老进程还占着 8776，新的 `go run .` 打一行 `监听失败：bind: address already in use` 就退了，浏览器还连着老的）—— 实际撞过：10-10 20:08 改回 250k，10-11 早上两次压缩还是按 50k 压的（`tokensBefore` 54255 / 50991 摆在那儿）。
+
+**现在**：阈值存在 `~/.go-harness/settings.json` 的 `{"compact": {"at": 250000}}`，**服务端每一轮现读** —— 改完下一条消息就生效，不用重启、不用重开会话。界面上：侧栏标题栏的 ⚙ →「压缩触发点」，右栏那行从「上下文 x / 1M」改成「上下文 x / 压缩线 y」。
+
+**`internal/settings`（新包）**：settings.json 的唯一读写口。抽出来的原因很实际：技能和压缩两个使用方各拿一把锁去改同一个文件，「读进来-改-写回去」会把先写的那次整个覆盖掉。`internal/skills/state.go` 现在只是薄薄一层（保留启停那套按 scope / cwd 记账的逻辑）。文件里空的段会被剪掉（`omitzero`，不是 `omitempty` —— 空结构体用后者压不掉），所以「没改过」和「文件不存在」是同一件事。
+
+**`compact.Limit(window, settings)`**：窗口减 reserve、再被 `at` 压低，哪个小算哪个。`ShouldCompact` 和界面显示用的是同一个函数 —— 显示的数和判断用的数不会各说各话。
+
+**验证**：`TestCompactThresholdTakesEffectNextTurn` 就是冲着这个 bug 写的（默认阈值不压 → 调低 → 下一轮压 → 调回默认 → meta 回到 250000）。做过反证：把「每轮现读」改掉，这条测试立刻挂。
+
+---
+
 ## 一句话状态
 
 DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持已做完并实测**（read 能读图、wire 能把图送出去）；**会话管理已做完并实测**（新建 / 继续 / 列出，`internal/session`，格式对齐 pi）。**产品方向改成 web 版，TUI 不做了**（2026-09-24 定），所以 `main.go` 那套 bubbletea 是过渡产物，`tui.Emit` 仍是空函数。
@@ -40,6 +83,7 @@ DeepSeek 已接通，工具 loop 端到端跑通并实测成功；**图片支持
 | `core`（loop） | ✅ 能用 |
 | **图片** | ✅ 已实现并实测：read 读图（png/jpeg/gif/webp/bmp，超限自动缩放）、wire 带图（tool 消息和 user 消息都带得动）。**实测跑的是 png，webp/bmp 的 API 接受度没测** |
 | **`session`（会话管理）** | ✅ 能用，有单测 + 端到端实测：新建 / 继续 / 列出，落在 `~/.go-harness/sessions/` |
+| **`skills` + AGENTS.md** | ✅ 已做完（2026-10-11）：两个 scope 的技能扫描、composer 上强制指定、web 端启停 / 删除 / 上传 zip 安装，详见上面的更新节 |
 | **`tui`（渲染）** | ❌ 不做了，改 web 版。`tui.Emit` 仍是空函数（`internal/tui/event.go:5`） |
 
 **验证方式**：`main.go` 走的是 bubbletea TUI，需要真 TTY，没法脚本化驱动，所以有个手动命令行驱动 `cmd/session-e2e` 直接调 `core.Run`（⚠️ 它会打真模型、花真钱，只手动跑，见第六节）。当初的 Java CRUD 是用同类驱动在 `/tmp/java-crud` 跑的：**5 轮、7 次工具调用、0 错误**，产物重新 `javac` + `java` 复验过。
@@ -148,6 +192,12 @@ internal/session/
   entry.go                     Header / Entry、id 生成、时间戳
   session.go                   Session：Append、leaf 回溯、落盘
   store.go                     cwd 编码、文件名、Create / Open / List / ContinueRecent
+internal/skills/
+  parse.go                     手写的最小 frontmatter 解析（不引 yaml 依赖）
+  skills.go                    Scan / Effective / Find / ByName / Body、启停与覆盖的判定
+  state.go                     ~/.go-harness/settings.json 的读写（原子落盘）
+  install.go                   zip 安装：顶层目录剥离、zip-slip 防护、覆盖
+internal/prompts/agents.go     读 <cwd>/AGENTS.md
 internal/types/                 全部类型定义（见第五节）
 internal/tui/                   ⚠️ event.go 的 Emit 是空的
 cmd/session-e2e/main.go         手动端到端驱动（⚠️ 见第六节「会花真钱」那条）

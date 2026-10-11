@@ -40,6 +40,11 @@ type Entry struct {
 	Timestamp string         `json:"timestamp"`
 	Message   *types.Message `json:"message,omitempty"`
 
+	// Skill 是这一轮用户指定必须用的技能名，只挂在那一轮的用户 entry 上。
+	// 它记录的是「发这条时用户选了什么」——重放历史时技能正文不会再贴一遍
+	// （那正是「只对下一条消息生效」），界面靠这个字段把角标补回来
+	Skill string `json:"skill,omitempty"`
+
 	Summary          string `json:"summary,omitempty"`
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
