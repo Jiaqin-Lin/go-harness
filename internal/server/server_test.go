@@ -131,8 +131,27 @@ func newTestServer(t *testing.T, llm *stubLLM) (base, cwd string) {
 	}
 	go srv.Serve(listener)
 	t.Cleanup(func() { listener.Close() })
+	awaitTitles(t)
 
 	return "http://" + listener.Addr().String(), cwd
+}
+
+// awaitTitles 等后台的标题任务收尾。它写的是会话目录里的 .title，不等的话会跟
+// t.TempDir 的 RemoveAll 抢跑，偶发「directory not empty」。
+//
+// 上限 2 秒：卡着的任务（测试里没放开的 gate）不该把收尾拖成 45 秒。
+// 必须是这个测试最后登记的那件收尾 —— cleanup 是后进先出，登记晚了就赶不上
+// 临时目录被删之前
+func awaitTitles(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		done := make(chan struct{})
+		go func() { titleWork.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	})
 }
 
 // runChat 发一条消息，把整条 SSE 流读完
@@ -495,6 +514,10 @@ func TestAbortEndpointStopsRunningTurn(t *testing.T) {
 	if resp2.StatusCode != http.StatusConflict {
 		t.Errorf("没在跑该 409，实际 %d", resp2.StatusCode)
 	}
+
+	// 放掉 gate，让后台那条生成标题的调用跑完：它挂着的话测试收尾得白等
+	// （见 awaitTitles）
+	close(gate)
 }
 
 // 找不到的会话是 400，不是把服务打崩
@@ -616,6 +639,9 @@ func TestAbortStillPersistsTurn(t *testing.T) {
 	if got := view.Entries[1].Message.StopReason; got != "aborted" {
 		t.Errorf("第二条该记成中止，实际 %q", got)
 	}
+
+	// 同上：那一轮虽然中止了，标题那条调用还在 gate 后面等着
+	close(gate)
 }
 
 // meta 给前端的是模型名和上下文窗口：右栏那行「上下文 x / y」的分母从这来

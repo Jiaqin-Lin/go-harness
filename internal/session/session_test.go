@@ -234,7 +234,7 @@ func TestListOnlyReturnsSessionsOfThatCwd(t *testing.T) {
 	home := setHome(t)
 	cwd, other := t.TempDir(), t.TempDir()
 
-	// 名字的形状：--<路径的可读编码>-<cwd 指纹>--，可读那半段照 pi 的规则编
+	// 名字的形状：--<路径的可读编码>-<cwd 指纹>--
 	if dir, err := dirFor("/Users/reuben/x"); err != nil {
 		t.Fatalf("算目录失败：%v", err)
 	} else if want := filepath.Join(home, ".go-harness", "sessions", "--Users-reuben-x-"+cwdHash("/Users/reuben/x")+"--"); dir != want {

@@ -75,7 +75,9 @@
           </button>
         </div>
         <div class="skill-menu" id="skill-menu" hidden></div>
-        <textarea id="composer-input" rows="1" placeholder="说点什么，回车发送，Shift+回车换行" aria-label="输入"></textarea>
+        <!-- @ 补全的候选：跟技能菜单同一块地方，谁先开谁占着 -->
+        <div class="file-menu" id="file-menu" hidden></div>
+        <textarea id="composer-input" rows="1" placeholder="说点什么，回车发送，Shift+回车换行，@ 引用文件" aria-label="输入"></textarea>
         <div class="composer-foot">
           <span class="composer-hint" id="composer-hint"></span>
           <span class="composer-actions">
@@ -129,6 +131,10 @@
         上下文涨到这个数就先压一次（留空 = 用默认）。保存后下一条消息就生效，不用重启。<br>
         压得越早越省钱，但模型的原始上下文丢得越多 —— 被压掉的部分只剩摘要。
       </p>
+      <div class="setting-row">
+        <span class="setting-label">技能</span>
+        <button type="button" class="btn btn-ghost btn-small" id="settings-skills">管理技能…</button>
+      </div>
     </div>
     <footer class="modal-foot">
       <span class="composer-hint" id="settings-note"></span>
@@ -167,10 +173,18 @@
       <span class="skill-root"><span class="skill-root-tag">用户级</span><code id="skills-userdir"></code></span>
       <span class="skill-root"><span class="skill-root-tag">项目级</span><code id="skills-projdir"></code></span>
     </div>
+    <!-- 列表的过滤：技能分用户级和项目级两处，混着列的时候想单看一层得能筛 -->
+    <div class="skill-filters" id="skills-filter">
+      <button type="button" class="skill-filter is-on" data-scope="all">全部</button>
+      <button type="button" class="skill-filter" data-scope="user">用户级</button>
+      <button type="button" class="skill-filter" data-scope="project">项目级</button>
+    </div>
     <div class="modal-body" id="skills-list"></div>
     <footer class="modal-foot">
       <span class="skills-install">
-        <select id="skills-scope" aria-label="装到哪一层">
+        <!-- 这个下拉是「zip 装到哪一层」，不是上面列表的过滤 -->
+        <span class="setting-unit">装到</span>
+        <select id="skills-scope" aria-label="上传的 zip 装到哪一层">
           <option value="user">用户级</option>
           <option value="project">项目级</option>
         </select>

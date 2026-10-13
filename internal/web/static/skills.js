@@ -132,10 +132,13 @@ export class SkillsModal {
     this.root = root;
     this.onChanged = onChanged;
     this.cwd = '';
+    this.list = []; // 最近一次读到的全量（两层都在里面），过滤只在这里面挑
+    this.filter = 'all';
     this.noteEl = root.querySelector('#skills-note');
     this.listEl = root.querySelector('#skills-list');
     this.userDirEl = root.querySelector('#skills-userdir');
     this.projDirEl = root.querySelector('#skills-projdir');
+    this.filterEl = root.querySelector('#skills-filter');
     this.scopeEl = root.querySelector('#skills-scope');
     this.fileEl = root.querySelector('#skills-file');
 
@@ -149,6 +152,13 @@ export class SkillsModal {
     // 「上传 zip」只是把系统文件选择器叫出来，真装是在选完文件之后（change）
     root.querySelector('#skills-upload').addEventListener('click', () => this.fileEl.click());
     this.fileEl.addEventListener('change', () => this.install());
+    // 换过滤不用重读磁盘：东西都在 this.list 里
+    this.filterEl.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-scope]');
+      if (!button) return;
+      this.filter = button.dataset.scope;
+      this.renderList();
+    });
   }
 
   async open(cwd) {
@@ -171,6 +181,7 @@ export class SkillsModal {
     try {
       data = await loadSkills(this.cwd);
     } catch (err) {
+      this.list = [];
       this.listEl.replaceChildren(note(`读不了技能：${err.message}`));
       return;
     }
@@ -179,10 +190,25 @@ export class SkillsModal {
     // 这里只负责显示，别在前端拼路径
     this.userDirEl.textContent = data.userDir;
     this.projDirEl.textContent = data.projectDir;
+    this.list = data.list;
+    this.renderList();
+  }
 
-    const rows = data.list.map((skill) => this.row(skill));
-    const empty = note('还没有技能。把技能目录放到上面任意一个目录下的 <名字>/SKILL.md，或者上传一个 zip');
+  // renderList 按当前过滤画列表 —— 列表里是两层的技能，过滤只看这儿的
+  // this.filter，跟页脚那个「zip 装到哪一层」的下拉没关系
+  renderList() {
+    const rows = this.list
+      .filter((skill) => this.filter === 'all' || skill.scope === this.filter)
+      .map((skill) => this.row(skill));
+
+    const empty = this.filter === 'all'
+      ? note('还没有技能。把技能目录放到上面任意一个目录下的 <名字>/SKILL.md，或者上传一个 zip')
+      : note('这一层下还没有技能。另一层的在上面两个目录里，或者切回「全部」看两边');
     this.listEl.replaceChildren(...(rows.length ? rows : [empty]));
+
+    for (const button of this.filterEl.querySelectorAll('[data-scope]')) {
+      button.classList.toggle('is-on', button.dataset.scope === this.filter);
+    }
   }
 
   row(skill) {

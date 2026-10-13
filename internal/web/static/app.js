@@ -6,6 +6,7 @@ import { renderMessage, renderCompaction, updateMessage, setSkillPaths, setImage
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
 import { SkillMenu, SkillsModal } from './skills.js';
+import { FileMenu } from './files.js';
 import { SettingsModal } from './settings.js';
 import { ConfirmModal } from './confirm.js';
 import { summarise, clip, numTokens } from './shared.js';
@@ -43,7 +44,9 @@ const dom = {
   skillPick: el('skill-pick'),
   skillChip: el('skill-chip'),
   skillMenu: el('skill-menu'),
+  fileMenu: el('file-menu'),
   skillsModal: el('skills'),
+  settingsSkills: el('settings-skills'),
   confirm: el('confirm'),
   splitterSidebar: el('splitter-sidebar'),
   splitterChat: el('splitter-chat'),
@@ -104,6 +107,19 @@ const skillsMenu = new SkillMenu({
   onManage: () => skillsModal.open(state.cwd),
 });
 
+// @ 补全：候选是当前项目里的路径（相对项目根）。它和技能菜单抢同一块地方，
+// 所以一露头就把技能菜单收掉
+const fileMenu = new FileMenu({
+  root: dom.fileMenu,
+  input: dom.input,
+  cwd: () => state.cwd,
+  onShow: () => skillsMenu.close(),
+  onChange: () => {
+    autoGrow();
+    renderComposer();
+  },
+});
+
 // refreshSkillPaths 把「SKILL.md 路径 → 技能名」喂给 chat.js，模型 read 技能时
 // 界面才认得出来。读不到就当没装技能：退回普通工具行，不影响别的。
 //
@@ -155,7 +171,31 @@ const settingsModal = new SettingsModal({
   },
 });
 
-el('open-settings').addEventListener('click', () => settingsModal.open({ compactAt: state.compactAt }));
+el('open-settings').addEventListener('click', () => {
+  // 技能是按项目扫的（项目级那份在项目目录里），没选项目就没得管
+  dom.settingsSkills.disabled = !state.cwd;
+  dom.settingsSkills.title = state.cwd ? '' : '先选一个项目';
+  settingsModal.open({ compactAt: state.compactAt });
+});
+
+// 设置里的技能入口：关掉设置、换成技能弹窗 —— 两个都开着会叠在一起
+dom.settingsSkills.addEventListener('click', () => {
+  if (!state.cwd) return;
+  settingsModal.close();
+  skillsModal.open(state.cwd);
+});
+
+// useProjectPath 把一个目录加成项目、在里面开一条新会话。系统对话框选出来的
+// 和页面上点出来的走的是同一条路
+async function useProjectPath(path) {
+  try {
+    await request('POST', '/api/projects', { path });
+    await refreshProjects();
+    newSession(path, /* openSidebar */ true);
+  } catch (err) {
+    dom.hint.textContent = err.message;
+  }
+}
 
 const picker = new DirPicker({
   root: el('dirpicker'),
@@ -163,15 +203,34 @@ const picker = new DirPicker({
   listEl: el('dirpicker-list'),
   onPick: async (path) => {
     picker.close();
-    try {
-      await request('POST', '/api/projects', { path });
-      await refreshProjects();
-      newSession(path, /* openSidebar */ true);
-    } catch (err) {
-      dom.hint.textContent = err.message;
-    }
+    await useProjectPath(path);
   },
 });
+
+// addProject 请服务端弹系统的目录选择器（访达那个真对话框）。浏览器拿不到本机
+// 绝对路径，所以这一步只能在服务端做；那边没有原生选择器时，退回页面上这个
+// 目录浏览弹窗
+async function addProject() {
+  // 对话框可能开在浏览器窗口后面：先说一句，免得按钮看着像没反应
+  dom.hint.textContent = '在系统对话框里选一个目录…';
+  let res;
+  try {
+    res = await request('POST', '/api/pick-directory', {});
+  } catch (err) {
+    renderComposer(); // 把上面那句提示收回去
+    if (err.status === 501) {
+      picker.open(state.cwd || '');
+      return;
+    }
+    dom.hint.textContent = err.message;
+    return;
+  }
+  if (res.canceled) {
+    renderComposer();
+    return;
+  }
+  await useProjectPath(res.path);
+}
 
 // ── 侧栏 ─────────────────────────────────────────────────
 
@@ -372,6 +431,7 @@ function newSession(cwd, openSidebar = false) {
   if (state.busy) return; // 跑着一轮的时候换会话，事件会灌进新会话里
   if (openSidebar) state.open.add(cwd);
   if (state.cwd !== cwd) state.skillChip = null; // 技能是按项目扫的，换项目别把上一个项目的选择带过来
+  fileMenu.close(); // 路径是相对项目算的，换了项目候选就全换了
   state.cwd = cwd;
   state.images = []; // 图是给「这一句」准备的，换了会话就作废
   state.notice = '';
@@ -407,6 +467,7 @@ async function openSession(cwd, id, entryId = null) {
 
   if (state.cwd !== cwd) {
     state.skillChip = null; // 同上：技能是跟着项目走的
+    fileMenu.close(); // 同上：候选路径也跟着项目走
     // 等技能表到齐再画：不然打开一个用过技能的历史会话，那几行会先闪一下普通
     // 工具行的样子（表是异步来的，历史是当场画的）
     await refreshSkillPaths(cwd);
@@ -809,6 +870,7 @@ async function send() {
   state.live.push({ el: userEl, msg: userMsg });
 
   dom.input.value = '';
+  fileMenu.close(); // 输入框是清空的，菜单里那些 @ 候选跟着作废
   state.images = [];
   autoGrow();
   state.busy = true;
@@ -999,6 +1061,7 @@ async function queueMessage(mode) {
     });
     state.queued.push({ id: res.id, mode, text, images });
     dom.input.value = '';
+    fileMenu.close();
     state.images = [];
     autoGrow();
   } catch (err) {
@@ -1301,9 +1364,16 @@ dom.input.addEventListener('input', () => {
   state.notice = ''; // 又动手打字了，上一句提示该让位了
   autoGrow();
   renderComposer();
+  fileMenu.update();
 });
 
 dom.input.addEventListener('keydown', (event) => {
+  // 补全菜单开着的时候，方向键 / 回车 / Tab / Esc 归它 —— 这儿的回车是
+  // 「把路径插进来」，不是把消息发出去
+  if (fileMenu.handleKey(event)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key !== 'Enter') return;
   if (event.isComposing) return; // 输入法选字时的回车不算发送
   if (event.shiftKey) return; // Shift+回车换行，交给 textarea 自己
@@ -1380,8 +1450,8 @@ dom.skillChip.addEventListener('click', (event) => {
 
 el('graph-fit').addEventListener('click', () => graph.fit());
 
-el('add-project').addEventListener('click', () => picker.open(state.cwd || ''));
-el('add-project-empty').addEventListener('click', () => picker.open(state.cwd || ''));
+el('add-project').addEventListener('click', addProject);
+el('add-project-empty').addEventListener('click', addProject);
 
 // ── 面板宽度与显隐 ───────────────────────────────────────
 // 两条分隔条拖宽窄，工具栏两个按钮藏/露；偏好存 localStorage，刷新还在

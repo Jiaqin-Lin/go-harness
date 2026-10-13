@@ -1,6 +1,6 @@
 // Package compact 把长会话折叠成摘要。
 //
-// 机制照 pi：token 数优先信 provider 报的用量（上一次请求的 prompt 有多大是它
+// token 数优先信 provider 报的用量（上一次请求的 prompt 有多大是它
 // 自己说的），超过「窗口 - reserve」就压；切点从最新往前累加到 keepRecent，
 // 只切在 user / assistant 消息上 —— tool_result 不能落在保留段的开头，
 // 它得跟着自己的 tool_call。
@@ -14,7 +14,7 @@ import (
 	"github.com/reuben/go-harness/internal/types"
 )
 
-// 默认值照 pi：reserve 是留给下一轮输出和工具结果的余量，
+// reserve 是留给下一轮输出和工具结果的余量，
 // keepRecent 是压缩之后原样保留的近期上下文
 const (
 	DefaultReserveTokens    = 16384

@@ -32,8 +32,7 @@ func keyFor(cwd, id string) sessionKey {
 }
 
 const (
-	// maxImages 是一条消息最多带几张图。pi 那张按模型声明的表（maxPerMessage）
-	// 只管声明、不强制，这里的数就是硬上限
+	// maxImages 是一条消息最多带几张图，硬上限
 	maxImages = 8
 	// maxImageRaw 是单张图的原始字节上限。前端按同一个数先拦一道（界面里的提示
 	// 比 413 友好），这儿兜底
@@ -246,14 +245,19 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 	// 下面接着长 —— 之后的历史都从这个节点开始重放
 	parentID = s.compactIfNeeded(ctx, stream, sess, parentID)
 
-	// 强制技能只进这一轮的 system prompt，重放历史的时候它不该再贴一遍，
-	// 这正是「只对下一条消息生效」。handleChat 校验过了，到这儿找不到
-	// 只可能是刚被删/停用——流都开了，报错没意义，当没选就是
+	// 强制技能：handleChat 校验过了，到这儿找不到只可能是刚被删/停用 ——
+	// 流都开了，报错没意义，当没选就是
 	var forced *skills.Skill
 	if skillName != "" {
 		if sk, ok := skills.ByName(cwd, skillName); ok {
 			forced = &sk
 		}
+	}
+	// 正文跟用户那句话拼在同一条消息里，不进 system prompt：system prompt 是
+	// 缓存前缀，每点一次技能就往里塞一份正文的话，那一轮从插入点起全部重算。
+	// 拼在消息上就是纯追加 —— 正文自己也在历史里，下一轮开始按缓存价走
+	if forced != nil {
+		prompt = withSkillBlock(prompt, *forced)
 	}
 
 	conversation := &types.Conversation{
@@ -261,7 +265,6 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 			Cwd:      cwd,
 			Tools:    allTools,
 			Skills:   skills.Effective(cwd),
-			Forced:   forced,
 			AgentsMD: prompts.ReadAgentsMD(cwd),
 		}),
 		Tools:    allTools,
@@ -300,6 +303,16 @@ func (s *Server) runTurn(ctx context.Context, stream *eventStream, sess *session
 		stream.send(wireEvent{Type: "entry", Entry: &entry})
 	}
 	return parent
+}
+
+// withSkillBlock 把技能正文块拼在这条用户消息最前面 —— 正文和用户那句话是同
+// 一条消息，落盘也在一起。没有正文可拼（读不出来）时块里也留着说明，模型至少
+// 知道这一轮被指定了哪个技能
+func withSkillBlock(msg *types.Message, s skills.Skill) *types.Message {
+	blocks := make([]types.ContentBlock, 0, len(msg.ContentBlocks)+1)
+	blocks = append(blocks, types.NewTextBlock(skills.Block(s)))
+	blocks = append(blocks, msg.ContentBlocks...)
+	return &types.Message{Role: msg.Role, ContentBlocks: blocks}
 }
 
 // compactIfNeeded 在上下文顶到阈值时先压一次，返回这一轮该挂在哪个 entry 下面

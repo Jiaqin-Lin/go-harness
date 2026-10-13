@@ -18,9 +18,12 @@ import (
 func newSkillsServer(t *testing.T, llm *stubLLM) (base, cwd, home string) {
 	t.Helper()
 	base, cwd = newTestServer(t, llm)
-	// newTestServer 自己设过一个 HOME，这里换掉：换成测试能直接往里放技能的那个
+	// newTestServer 自己设过一个 HOME，这里换掉：换成测试能直接往里放技能的那个。
+	// 换了 HOME 就得重登记一次「等标题收尾」—— 后进先出的收尾顺序里，
+	// 它得排在删这个 HOME 的前面
 	home = t.TempDir()
 	t.Setenv("HOME", home)
+	awaitTitles(t)
 	return base, cwd, home
 }
 
@@ -205,7 +208,8 @@ func TestDisableTakesEffectNextTurn(t *testing.T) {
 	}
 }
 
-// 强制技能：正文整份进这一轮的 prompt，而且不落进会话文件——只对这一条消息生效
+// 强制技能：正文跟用户那条消息一起走（不进 system prompt —— 那是请求的缓存
+// 前缀，塞进去等于每点一次技能就把整段历史从那儿往后全部作废），跟着消息落盘
 func TestForcedSkillBodyInjected(t *testing.T) {
 	llm := &stubLLM{replies: []string{"答"}}
 	base, cwd, home := newSkillsServer(t, llm)
@@ -215,28 +219,36 @@ func TestForcedSkillBodyInjected(t *testing.T) {
 
 	runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "把这份 PDF 处理一下", "skill": "pdf-tools"})
 
+	// system prompt 里一个字都不该变：清单还在（模型得知道有这个技能），正文不在
 	prompt := llm.lastSystemPrompt(t)
-	if !strings.Contains(prompt, "这一轮用户指定了技能「pdf-tools」") {
-		t.Fatalf("强制的技能该在 prompt 里说清楚：\n%s", prompt)
+	if strings.Contains(prompt, "第一步先跑 scripts/extract.sh") || strings.Contains(prompt, "<skill name=") {
+		t.Errorf("技能正文不该进 system prompt：\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "第一步先跑 scripts/extract.sh") {
-		t.Errorf("强制技能的正文该整份贴进 prompt：\n%s", prompt)
-	}
-	if strings.Index(prompt, "第一步先跑 scripts/extract.sh") < strings.Index(prompt, "当前工作目录") {
-		t.Errorf("正文该压在 prompt 最后：\n%s", prompt)
+	if !strings.Contains(prompt, "pdf-tools") {
+		t.Errorf("清单里还得有这个技能：\n%s", prompt)
 	}
 
-	// 会话文件里不该有技能的正文：下一轮重放历史时它不该再出现
+	// 发给模型的那条用户消息：正文块在前，用户那句话在后，同一条消息
+	histories := llm.histories()
+	if len(histories) == 0 || len(histories[0]) == 0 {
+		t.Fatal("没记到发给模型的消息")
+	}
+	sent := histories[0][0].Text()
+	if !strings.HasPrefix(sent, `<skill name="pdf-tools"`) {
+		t.Fatalf("正文块该在这条消息最前面：\n%s", sent)
+	}
+	if !strings.Contains(sent, "第一步先跑 scripts/extract.sh") {
+		t.Errorf("正文该在块里：\n%s", sent)
+	}
+	if !strings.HasSuffix(sent, "把这份 PDF 处理一下") {
+		t.Errorf("用户那句话该跟在块后面：\n%s", sent)
+	}
+
+	// 落盘也在一起：下一轮重放历史时正文还在（跟模型自己 read 技能一个待遇）
 	view := fetchSession(t, base, cwd, id)
-	for _, entry := range view.Entries {
-		if entry.Message == nil {
-			continue
-		}
-		for _, block := range entry.Message.Blocks {
-			if strings.Contains(block.Text, "第一步先跑 scripts/extract.sh") {
-				t.Errorf("强制技能不该落进会话文件：%+v", block)
-			}
-		}
+	first := view.Entries[0]
+	if first.Message == nil || !strings.Contains(first.Message.Blocks[0].Text, "第一步先跑 scripts/extract.sh") {
+		t.Errorf("正文该跟用户那条消息一起落盘：%+v", first)
 	}
 
 	// 名字要落在这一轮的用户 entry 上：刷新之后界面靠它把角标补回来。
@@ -249,6 +261,24 @@ func TestForcedSkillBodyInjected(t *testing.T) {
 		if entry.Skill != want {
 			t.Errorf("第 %d 条 entry 的技能名该是 %q，实际 %q", i, want, entry.Skill)
 		}
+	}
+}
+
+// 点过技能的会话里，下一轮的 system prompt 必须跟上一轮一字不差 ——
+// 这就是前缀缓存能命中的前提（点技能不该动前缀）
+func TestForcedSkillKeepsSystemPromptStable(t *testing.T) {
+	llm := &stubLLM{replies: []string{"答"}}
+	base, cwd, home := newSkillsServer(t, llm)
+	writeSkillFile(t, filepath.Join(home, ".go-harness", "skills"), "pdf",
+		"---\nname: pdf-tools\ndescription: 处理 PDF\n---\n\n第一步先跑 scripts/extract.sh\n")
+	const id = "dddd5555eeee6666"
+
+	runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第一问", "skill": "pdf-tools"})
+	withSkill := llm.lastSystemPrompt(t)
+
+	runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "第二问"})
+	if plain := llm.lastSystemPrompt(t); plain != withSkill {
+		t.Errorf("强制过技能的那轮不该改到 system prompt：\n--- 强制那轮 ---\n%s\n--- 下一轮 ---\n%s", withSkill, plain)
 	}
 }
 

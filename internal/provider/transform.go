@@ -11,13 +11,6 @@ import (
 // OpenAI 协议要求每个 tool_call 都跟着一条对应的 tool 消息，但历史是棵树，
 // 一条路径可以停在任何地方：停在带 tool_call 的 assistant 上、或者并行调了
 // 三个工具只执行了一个，历史里就缺配对，请求直接 400。
-//
-// 补在这一层、而不是在树上做什么「这个节点不能分叉」的校验：
-// 这里是发请求前唯一的关口，绕不过去，分支点也就随便点。
-//
-// 只补配对，不丢消息 —— pi 那边还会顺手跳过 error/aborted 的 assistant，
-// 这里不抄：core/loop.go 在中断路径上已经替它们补过配对，再跳过那些消息
-// 反而把后面的 tool_result 变成新的孤儿
 func NormalizeToolCalls(messages []*types.Message) []*types.Message {
 	out := make([]*types.Message, 0, len(messages))
 

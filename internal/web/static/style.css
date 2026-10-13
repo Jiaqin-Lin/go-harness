@@ -576,8 +576,24 @@ body {
   overflow: hidden;
 }
 .tool-line { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--text-2); }
+/* 摘要行就是 details 的 summary：默认折着，点开看完整参数和输出 */
+.tool-call > summary { cursor: pointer; list-style: none; }
+.tool-call > summary::-webkit-details-marker { display: none; }
+.tool-call > summary::before { content: "▸"; color: var(--text-3); font-size: 10px; }
+.tool-call[open] > summary::before { content: "▾"; }
 .tool-name { color: var(--text); }
 .tool-args { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 展开后的完整参数：长命令整条铺开换行，摘要行的省略号只是一行显示不下的省法 */
+.tool-args-full {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
 .tool-out {
   margin: 0;
   padding: 8px 10px;
@@ -745,7 +761,9 @@ body {
 .skill-chip-x { color: var(--text-3); cursor: pointer; line-height: 1; }
 .skill-chip-x:hover { color: var(--danger); }
 
-.skill-menu {
+/* 输入框上方的两块菜单（技能、@ 补全）长一个样，位置也一样 —— 同一时刻
+   只该露一个，谁后开谁在上面 */
+.skill-menu, .file-menu {
   position: absolute;
   left: 12px;
   right: 12px;
@@ -760,7 +778,7 @@ body {
   box-shadow: 0 14px 34px -18px var(--scrim);
 }
 
-.skill-menu-item {
+.skill-menu-item, .file-menu-item {
   display: block;
   width: 100%;
   text-align: left;
@@ -772,11 +790,19 @@ body {
   padding: 7px 10px;
   cursor: pointer;
 }
-.skill-menu-item:hover { background: var(--raised); color: var(--text); }
+.skill-menu-item:hover, .file-menu-item:hover { background: var(--raised); color: var(--text); }
 /* 看历史节点的时候技能列出来但点不了（见 skills.js 的 canPick） */
 .skill-menu-item[disabled] { opacity: .45; cursor: default; }
 .skill-menu-item[disabled]:hover { background: transparent; }
 .skill-menu-manage { color: var(--text-3); font-size: 12px; }
+
+/* @ 补全那一行：目录压暗、名字亮着，方向键选中的那条加底 */
+.file-menu-item { font-family: var(--mono); font-size: 12px; }
+.file-menu-item.is-active { background: var(--raised); color: var(--text); }
+.file-path { color: var(--text-3); }
+.file-name { color: var(--text); }
+.file-menu-item.is-active .file-path { color: var(--text-2); }
+.file-menu-hint { padding: 6px 10px 4px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--text-3); }
 
 .skill-text { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .skill-name { font-size: 12.5px; color: var(--text); }
@@ -812,6 +838,22 @@ body {
 .skill-root { display: flex; align-items: baseline; gap: 8px; }
 .skill-root-tag { flex: none; width: 3em; color: var(--text-3); }
 .skill-root code { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
+
+/* 技能列表的过滤：全部 / 只用户级 / 只项目级。跟页脚「装到」那个下拉不是
+   一回事 —— 那个管上传的 zip 落在哪一层 */
+.skill-filters { display: flex; gap: 6px; padding: 10px 16px 6px; }
+.skill-filter {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.skill-filter:hover { color: var(--text); }
+.skill-filter.is-on { color: var(--text); background: var(--raised); border-color: var(--line); }
 
 .sidebar-actions { display: flex; align-items: center; gap: 2px; }
 

@@ -1,4 +1,4 @@
-// 会话文件格式跟 pi 对齐：一行一个 JSON，第一行是 header，之后每行是一个 entry。
+// 一行一个 JSON，第一行是 header，之后每行是一个 entry。
 // entry 自己带 id / parentId，所以历史是一棵树，分支就是「从旧节点再挂一个子节点」。
 package session
 
@@ -41,8 +41,8 @@ type Entry struct {
 	Message   *types.Message `json:"message,omitempty"`
 
 	// Skill 是这一轮用户指定必须用的技能名，只挂在那一轮的用户 entry 上。
-	// 它记录的是「发这条时用户选了什么」——重放历史时技能正文不会再贴一遍
-	// （那正是「只对下一条消息生效」），界面靠这个字段把角标补回来
+	// 它记录的是「发这条时用户选了什么」——正文已经拼在那条消息里了
+	// （见 skills.Block），这个字段是给界面补角标用的
 	Skill string `json:"skill,omitempty"`
 
 	Summary          string `json:"summary,omitempty"`

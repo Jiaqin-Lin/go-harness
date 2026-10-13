@@ -64,46 +64,6 @@ func TestPromptInjectsAgentsMD(t *testing.T) {
 	}
 }
 
-// 强制的技能：正文整份贴上，还要给出技能目录，正文压在 prompt 最后
-func TestPromptInjectsForcedSkillBody(t *testing.T) {
-	s := skillFixture(t, "pdf-tools", "---\nname: pdf-tools\ndescription: 处理 PDF\n---\n", "第一步先跑 extract.sh")
-	prompt := BuildSystemPrompt(Input{
-		Cwd:      "/proj",
-		Tools:    []*types.Tool{testTool()},
-		Skills:   []skills.Skill{s},
-		Forced:   &s,
-		AgentsMD: "提交前跑 go test",
-	})
-
-	if !strings.Contains(prompt, "第一步先跑 extract.sh") {
-		t.Errorf("强制技能的正文该贴进来：\n%s", prompt)
-	}
-	if !strings.Contains(prompt, s.Dir) {
-		t.Errorf("该告诉模型技能目录在哪：\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "- pdf-tools: 技能说明（"+s.Path+"）") {
-		t.Errorf("强制的那份也还在技能清单里：\n%s", prompt)
-	}
-
-	// 正文排在最后：越靠后模型越容易照做
-	if strings.Index(prompt, "第一步先跑 extract.sh") < strings.Index(prompt, "当前工作目录") {
-		t.Errorf("强制技能的正文该压在 prompt 最后：\n%s", prompt)
-	}
-}
-
-// 正文读不出来也只是少一段材料，不该把拼 prompt 这件事搞崩
-func TestPromptForcedSkillUnreadable(t *testing.T) {
-	s := skillFixture(t, "gone", "---\nname: gone\n---\n", "正文")
-	if err := os.Remove(s.Path); err != nil {
-		t.Fatal(err)
-	}
-
-	prompt := BuildSystemPrompt(Input{Cwd: "/proj", Tools: []*types.Tool{testTool()}, Forced: &s})
-	if !strings.Contains(prompt, "技能正文读不出来") {
-		t.Errorf("正文读不出来该在 prompt 里说明：\n%s", prompt)
-	}
-}
-
 func TestReadAgentsMD(t *testing.T) {
 	dir := t.TempDir()
 	if got := ReadAgentsMD(dir); got != "" {

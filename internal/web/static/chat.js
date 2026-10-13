@@ -1,7 +1,7 @@
 // 消息渲染。落过盘的 entry 和正在流的那条走同一套函数 —— 一轮跑完把流式的
 // 换成落盘的，视觉上不该有跳动
 
-import { roleLabel, argsPreview, clip, numTokens } from './shared.js';
+import { roleLabel, argsPreview, clip, numTokens, stripSkillBlock } from './shared.js';
 
 // 参数原样转给 updateMessage：多一个字段（比如 entryId）就不用两边都改一遍 ——
 // 少改一边的话，落盘的图片气泡会悄悄退回占位文字，谁都不报错
@@ -61,7 +61,7 @@ export function updateMessage(el, msg, { streaming = false, folded = false, skil
     const used = document.createElement('span');
     used.className = 'skill-badge skill-badge--used';
     used.textContent = '技能 ' + skill;
-    used.title = '这一轮指定用这个技能（正文只进了这一轮的 system prompt）';
+    used.title = '这一轮指定用这个技能（正文跟着这条消息一起进了对话）';
     head.append(used);
   }
   if (msg.usage) {
@@ -117,7 +117,10 @@ function fillBody(body, msg, streaming, entryId) {
     if (block.kind === 'thinking' && block.thinking) {
       children.push(thinkingBlock(block, streaming));
     } else if (block.kind === 'text' && block.text) {
-      children.push(textBlock(block, { caret: streaming && isLast }));
+      // 用户点过技能的那条消息，正文跟着一起进了历史（服务端拼的）。页面上
+      // 只该看见用户自己的话 —— 技能有「技能 X」角标，正文几十 KB 摆出来没法看
+      const text = stripSkillBlock(block.text);
+      if (text) children.push(textBlock({ text }, { caret: streaming && isLast }));
     } else if (block.kind === 'tool') {
       children.push(toolCallBlock(block, { running: streaming && isLast }));
     } else if (block.kind === 'image') {
@@ -182,12 +185,27 @@ function skillRead(block) {
   return name ? { name, path } : null;
 }
 
+// expandedTools 记着哪些工具卡被展开过。一条消息每次重画都是整个重建
+// （流式收尾、落盘认领各来一次），不记的话用户正看着的那张卡会当场弹回折叠
+const expandedTools = new Set();
+
+// toolCallBlock 造一张调用卡：默认折叠，摘要行是工具名 + 一行参数预览，
+// 展开才看到完整参数和输出。长命令就靠这个展开看全 —— 摘要行的省略号只是
+// 显示不下时省宽度，不是内容被截掉了
 function toolCallBlock(block, { running }) {
-  const wrap = document.createElement('div');
+  const id = block.toolCallId || '';
+  const wrap = document.createElement('details');
   wrap.className = 'tool-call' + (running ? ' is-running' : '');
   // 结果靠这个 id 找回来贴进同一张卡（见 attachToolResult / app.js 的 renderChat）
-  if (block.toolCallId) wrap.dataset.toolCallId = block.toolCallId;
-  const line = document.createElement('div');
+  if (id) wrap.dataset.toolCallId = id;
+  wrap.open = expandedTools.has(id);
+  wrap.addEventListener('toggle', () => {
+    if (!id) return;
+    if (wrap.open) expandedTools.add(id);
+    else expandedTools.delete(id);
+  });
+
+  const line = document.createElement('summary');
   line.className = 'tool-line';
   const name = document.createElement('span');
   name.className = 'tool-name';
@@ -208,7 +226,29 @@ function toolCallBlock(block, { running }) {
 
   line.append(name, args);
   wrap.append(line);
+  const full = toolArgsBody(block);
+  if (full) wrap.append(full);
   return wrap;
+}
+
+// toolArgsBody 是展开后那段参数：bash 给整条命令，别的给整形 JSON。
+// 读不出来（参数还在流）就原样给，反正展开的时候它就长这样
+function toolArgsBody(block) {
+  const raw = (block.args || '').trim();
+  if (!raw) return null;
+
+  let text = raw;
+  try {
+    const args = JSON.parse(raw);
+    text = typeof args?.command === 'string' ? args.command : JSON.stringify(args, null, 2);
+  } catch {
+    /* 参数还没流完，原样显示 */
+  }
+
+  const pre = document.createElement('pre');
+  pre.className = 'tool-args-full';
+  pre.textContent = text;
+  return pre;
 }
 
 // attachToolResult 把一次调用的结果贴进它那张卡：调用和结果是同一件事，

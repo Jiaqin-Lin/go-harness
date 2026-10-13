@@ -14,11 +14,25 @@ export function roleLabel(msg) {
 export function summarise(msg) {
   if (!msg || !msg.blocks) return '';
   for (const block of msg.blocks) {
-    if (block.kind === 'text' && block.text) return block.text;
+    if (block.kind === 'text') {
+      const text = stripSkillBlock(block.text || '');
+      if (text) return text; // 只剩技能块的（用户只发了图）接着往下看
+      continue;
+    }
     if (block.kind === 'tool') return [block.toolName, argsPreview(block.toolName, block.args)].filter(Boolean).join(' ');
     if (block.kind === 'image') return '图片';
   }
   return msg.errorMessage || '';
+}
+
+// stripSkillBlock 去掉用户消息开头的技能正文块（服务端拼上去的，格式见 Go 侧
+// skills.Block）。正文几十 KB，原样摆到气泡、图上标签、侧栏预览里都没法看
+export function stripSkillBlock(text) {
+  const raw = String(text ?? '');
+  if (!raw.startsWith('<skill name=')) return raw;
+  const cut = raw.indexOf('</skill>');
+  if (cut < 0) return raw; // 块是断的，原样给，别把内容吞了
+  return raw.slice(cut + '</skill>'.length).replace(/^\n+/, '');
 }
 
 // argsPreview 把工具参数压成一行：有命令就给命令，其次给路径

@@ -116,7 +116,7 @@ func wireMessageFrom(msg *types.Message) wireMessage {
 }
 
 // contentOf 摊平一条消息的内容。没有图片就给字符串——OpenAI 兼容接口对 content
-// 数组的支持参差（pi 撞到过模型把数组结构原样抄进输出），纯文本没必要冒这个险。
+// 数组的支持参差（撞到过模型把数组结构原样抄进输出），纯文本没必要冒这个险。
 // 有图片就必须用数组，图片只能以 content part 的形式随消息发出去
 func contentOf(blocks []types.ContentBlock) any {
 	hasImage := false

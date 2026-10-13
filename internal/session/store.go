@@ -350,7 +350,7 @@ func sessionsRoot() (string, error) {
 
 // dirFor 是 cwd 对应的会话目录：~/.go-harness/sessions/--<cwd 编码>-<指纹>--。
 //
-// 编码规则照 pi（去掉开头的 /，再把 / \ : 换成 -）—— 它是多对一的：/a-b 和 /a/b
+// 编码规则：去掉开头的 /，再把 / \ : 换成 -。它是多对一的：/a-b 和 /a/b
 // 编出来都是 a-b，光靠它两个项目会住进同一个目录。所以尾巴上再钉一段 cwd 的指纹，
 // 把「目录名 → cwd」拉回一对一。名字只是标签，文件头里的 cwd 才是权威
 func dirFor(cwd string) (string, error) {

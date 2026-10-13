@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/reuben/go-harness/internal/session"
+	"github.com/reuben/go-harness/internal/skills"
 	"github.com/reuben/go-harness/internal/types"
 )
 
@@ -23,6 +24,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects", s.handleProjectAdd)
 	mux.HandleFunc("DELETE /api/projects", s.handleProjectRemove)
 	mux.HandleFunc("GET /api/fs", s.handleListDirs)
+	mux.HandleFunc("GET /api/files", s.handleListFiles)
+	mux.HandleFunc("POST /api/pick-directory", s.handlePickDirectory)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/session", s.handleSession)
@@ -97,7 +100,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				Modified: info.Modified.Format(time.RFC3339),
 			}
 			if item.Title == "" {
-				item.Preview = clip(session.FirstUserText(info.Path), 48)
+				item.Preview = clip(skills.StripBlock(session.FirstUserText(info.Path)), 48)
 			}
 			dto.Sessions = append(dto.Sessions, item)
 		}
@@ -221,10 +224,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, view)
 }
 
+// firstUserText 是侧栏的兜底标题：第一条用户消息。带上技能正文块的那条得先
+// 剥掉 —— 预览就 48 个字，不剥的话显示的是技能正文的开头
 func firstUserText(sess *session.Session) string {
 	for _, entry := range sess.Entries() {
 		if entry.Message != nil && entry.Message.Role == types.UserRole {
-			return session.MessagePreview(entry.Message)
+			return skills.StripBlock(session.MessagePreview(entry.Message))
 		}
 	}
 	return ""

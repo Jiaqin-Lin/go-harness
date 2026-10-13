@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/reuben/go-harness/internal/session"
@@ -10,6 +11,10 @@ import (
 
 // titleTimeout 是标题生成自己那口钟。独立于任何请求 —— 请求早就结束了
 const titleTimeout = 45 * time.Second
+
+// titleWork 数着还没收尾的后台标题任务。跑起来之后没人等它（标题是锦上添花），
+// 只有测试在收尾前等：它写的是会话目录里的 .title，跟临时目录的清理会抢跑
+var titleWork sync.WaitGroup
 
 // maybeTitle 在一轮跑完之后判断要不要起一个后台标题生成。
 // 只有「这个会话还没有标题」时才起，而且同一时刻只允许一个在跑：
@@ -33,11 +38,13 @@ func (s *Server) maybeTitle(sess *session.Session) {
 	messages := sess.Messages()
 	generate := s.cfg.Generate
 
+	titleWork.Add(1)
 	go func() {
 		defer func() {
 			s.mu.Lock()
 			delete(s.titles, path)
 			s.mu.Unlock()
+			titleWork.Done()
 		}()
 
 		// 注意不能用请求的 ctx：请求早在 SSE 关掉时就结束了，

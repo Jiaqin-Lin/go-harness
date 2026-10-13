@@ -23,11 +23,10 @@ import (
 )
 
 // 图片这条路：嗅探出格式 -> 解码 -> 超过上限就缩放重编码 -> 塞进 ImageBlock。
-// 尺寸和体积的上限照抄 pi（packages/coding-agent/src/utils/image-resize-core.ts）
 const (
 	maxImageWidth  = 2000
 	maxImageHeight = 2000
-	// 上限卡的是 base64 编码之后的字节数，不是原始字节数。pi 取 4.5MB 是为了压在
+	// 上限卡的是 base64 编码之后的字节数，不是原始字节数。4.5MB 是为了压在
 	// Anthropic 5MB 的 inline 上限下面，DeepSeek 没给公开数值，先照用
 	maxImageBase64 = 4.5 * 1024 * 1024
 	jpegQuality    = 80

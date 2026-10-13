@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/reuben/go-harness/internal/provider"
+	"github.com/reuben/go-harness/internal/skills"
 	"github.com/reuben/go-harness/internal/types"
 )
 
@@ -21,13 +22,15 @@ func Generate(ctx context.Context, generate provider.GenerateFunction, messages 
 		return ""
 	}
 
-	// 只喂开头一问一答：整条路径又长又贵，概括也用不上
+	// 只喂开头一问一答：整条路径又长又贵，概括也用不上。
+	// 用户点过技能的那条消息带着几十 KB 的技能正文（见 skills.Block），
+	// 不剥掉的话标题会从技能正文里长出来，跟这一轮问的什么没关系
 	var parts []string
 	for _, msg := range messages {
 		if msg.Role != types.UserRole && msg.Role != types.AssistantRole {
 			continue
 		}
-		if text := msg.Text(); text != "" {
+		if text := strings.TrimSpace(skills.StripBlock(msg.Text())); text != "" {
 			parts = append(parts, string(msg.Role)+"："+head(text, 400))
 		}
 		if len(parts) == 2 {

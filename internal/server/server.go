@@ -43,6 +43,9 @@ type Server struct {
 	running   map[sessionKey]*run
 	titles    map[string]bool // 正在生成标题的会话文件，别为同一个会话付两次钱
 
+	// picking 护着系统目录选择器：它一次只能开一个，叠出来的两个谁也说不清哪个算数
+	picking sync.Mutex
+
 	// seq 给排队消息发认领凭据。只在一次 run 里要唯一，够用
 	seq atomic.Uint64
 }
