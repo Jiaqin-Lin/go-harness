@@ -572,6 +572,91 @@ body {
 /* position: relative 是给技能菜单定位用的，它挂在输入框上方 */
 .composer { position: relative; border-top: 1px solid var(--line); padding: 10px 12px 12px; background: var(--surface); }
 
+/* 拖图片拖到 composer 上时整块亮一下，让人知道能往这儿放 */
+.composer.is-dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+/* ── 图片 ─────────────────────────────────────────────── */
+
+.composer-images { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+
+.image-chip {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--sunk);
+}
+
+.image-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.image-chip-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: rgb(0 0 0 / .55);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.image-count { font-size: 11px; color: var(--text-3); align-self: flex-end; }
+
+/* 对话里的图（用户发的、模型 read 到的都走这个） */
+.msg-image { display: inline-block; max-width: 100%; }
+.msg-image img {
+  display: block;
+  max-width: min(320px, 100%);
+  max-height: 240px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--sunk);
+}
+
+/* ── 运行中排队 ───────────────────────────────────────── */
+
+.composer-queue { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+
+.queue-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+}
+
+.queue-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-chip-mode { flex: none; color: var(--text-3); }
+
+.queue-chip-x {
+  flex: none;
+  margin-left: auto;
+  font: inherit;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.queue-chip-x:hover { color: var(--danger); }
+
+/* 插话这一档是「马上要被看到」的，给它强调色。前一行是不认 color-mix 时的退路 */
+.queue-chip--steer { border-color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+
 /* ── 技能 ─────────────────────────────────────────────── */
 
 .composer-skills { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }

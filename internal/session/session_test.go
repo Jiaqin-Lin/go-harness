@@ -590,6 +590,31 @@ func TestFirstUserText(t *testing.T) {
 	}
 }
 
+// 只发了图、没写字的那句：正文是空的，但侧栏不能当成空消息 —— 那看起来像坏了
+func TestFirstUserTextFallsBackForImageOnly(t *testing.T) {
+	setHome(t)
+	cwd := t.TempDir()
+
+	s, _ := Create(cwd)
+	imageOnly := &types.Message{
+		Role:          types.UserRole,
+		ContentBlocks: []types.ContentBlock{{Kind: types.ImageBlock, ImageMime: "image/png", ImageData: "AAAA"}},
+	}
+	if _, err := s.Append(imageOnly); err != nil {
+		t.Fatalf("落盘失败：%v", err)
+	}
+	if got := FirstUserText(s.Path()); got != "[图片]" {
+		t.Errorf("只有图的消息该显示 [图片]，实际 %q", got)
+	}
+	// 有正文就还是正文：图是附带的
+	both := &types.Message{Role: types.UserRole, ContentBlocks: []types.ContentBlock{
+		types.NewTextBlock("看这张"), {Kind: types.ImageBlock, ImageMime: "image/png", ImageData: "AAAA"},
+	}}
+	if got := MessagePreview(both); got != "看这张" {
+		t.Errorf("有正文时该给正文，实际 %q", got)
+	}
+}
+
 func TestProjectsRoundTrip(t *testing.T) {
 	home := setHome(t)
 	dir := filepath.Join(home, "work", "proj") // 不用真存在：清单只记路径

@@ -101,7 +101,7 @@ func main() {
 		}
 	}
 
-	for _, msg := range core.Run(ctx, []*types.Message{prompt}, conversation, llm.Generate, emit) {
+	for _, msg := range core.Run(ctx, []*types.Message{prompt}, conversation, llm.Generate, emit, core.Queues{}) {
 		conversation.Messages = append(conversation.Messages, msg)
 		if _, err := sess.Append(msg); err != nil {
 			fmt.Fprintf(os.Stderr, "会话没存上：%v\n", err)

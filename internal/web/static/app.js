@@ -2,7 +2,7 @@
 // 只有流式那一轮走增量（见 dom.live / state.streaming）
 
 import { getJSON, request, streamChat } from './api.js';
-import { renderMessage, renderCompaction, updateMessage, setSkillPaths } from './chat.js';
+import { renderMessage, renderCompaction, updateMessage, setSkillPaths, setImageCtx } from './chat.js';
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
 import { SkillMenu, SkillsModal } from './skills.js';
@@ -33,6 +33,12 @@ const dom = {
   send: el('composer-send'),
   stop: el('composer-stop'),
   hint: el('composer-hint'),
+  images: el('composer-images'),
+  queue: el('composer-queue'),
+  imagePick: el('image-pick'),
+  imageFile: el('image-file'),
+  steer: el('queue-steer'),
+  follow: el('queue-follow'),
   skillPick: el('skill-pick'),
   skillChip: el('skill-chip'),
   skillMenu: el('skill-menu'),
@@ -59,6 +65,9 @@ const state = {
   busy: false,
   abort: null,
   skillChip: null,   // 这一轮强制要用的技能名；只对下一条消息生效，发出去就清
+  images: [],        // 还没发出去的图：{mime, bytes, name, dataUrl}
+  queued: [],        // 运行中发出去、还没投递的：{id, mode, text, images}
+  notice: '',        // 这一会儿要顶在 hint 上的那句话（超限、刚跑完之类）
   live: [],          // 这一轮已经画出来、还没落盘的消息
   streaming: null,   // 正在长的那个元素
   connecting: null,  // 「正在连接模型…」那行占位
@@ -284,6 +293,8 @@ function newSession(cwd, openSidebar = false) {
   if (openSidebar) state.open.add(cwd);
   if (state.cwd !== cwd) state.skillChip = null; // 技能是按项目扫的，换项目别把上一个项目的选择带过来
   state.cwd = cwd;
+  state.images = []; // 图是给「这一句」准备的，换了会话就作废
+  state.notice = '';
   refreshSkillPaths(cwd);
   state.sessionId = newSessionID();
   state.draft = true;
@@ -323,6 +334,8 @@ async function openSession(cwd, id, entryId = null) {
   state.cwd = cwd;
   state.sessionId = id;
   state.draft = false;
+  state.images = [];
+  state.notice = '';
   state.open.add(cwd);
   applySession(view);
   state.selected = (entryId && entryById(entryId) ? entryId : state.leafId) || null;
@@ -538,12 +551,14 @@ function turnLabel(entryId) {
 function renderChat() {
   const path = pathEntries();
   const folded = foldedSet(path);
+  // 图片是按会话现取的（接口不带图片内容），画历史之前先把定位交给 chat.js
+  setImageCtx({ cwd: state.cwd, sessionId: state.sessionId });
   // 折叠段是路径的前缀（firstKeptEntryId 自己永远进上下文），所以第一条还进
   // 上下文的 entry 的下标就是被折掉的条数，也就是分隔线的落点
   const cut = path.findIndex((entry) => !folded.has(entry.id));
   const nodes = path.map((entry) => (entry.compaction
     ? renderCompaction(entry, { folded: folded.has(entry.id) })
-    : renderMessage(entry.message || {}, { folded: folded.has(entry.id), skill: entry.skill })));
+    : renderMessage(entry.message || {}, { folded: folded.has(entry.id), skill: entry.skill, entryId: entry.id })));
   if (cut > 0) nodes.splice(cut, 0, foldLine(cut));
   withPin(() => {
     dom.history.replaceChildren(...nodes);
@@ -581,17 +596,40 @@ function pathSummary(path) {
 }
 
 function renderComposer() {
-  const ready = Boolean(state.sessionId) && !state.busy && sendParent() !== null;
-  dom.input.disabled = !ready;
-  dom.send.disabled = !ready || !dom.input.value.trim();
+  // 跑着的时候输入框照样能打：这一句发出去不是新一轮，而是排到正在跑的那一轮上
+  // （插话 / 排队，见 queueMessage）。选中历史节点时（sendParent 为 null）不能发，
+  // 除非正在跑 —— 排队的消息对着的是正在跑的那条线，跟选了哪个节点无关
+  const canType = Boolean(state.sessionId) && (state.busy || sendParent() !== null);
+  const canSend = canType && Boolean(dom.input.value.trim() || state.images.length);
+
+  dom.input.disabled = !canType;
   dom.stop.hidden = !state.busy;
   dom.remove.hidden = state.draft || !state.sessionId;
-  dom.hint.textContent = state.busy ? '正在跑…' : branchHint();
+  dom.hint.textContent = state.notice || (state.busy ? busyHint() : branchHint());
 
-  // 技能按钮只看 cwd：还没选会话时也得能进管理界面（管理弹窗按 cwd 走，跟会话无关）
-  dom.skillPick.disabled = !state.cwd;
+  // 跑着的时候发送区换成两个明确的动作：插话 / 排队，按哪个发生哪个，没有额外的开关
+  dom.send.hidden = state.busy;
+  dom.send.disabled = !canSend;
+  dom.steer.hidden = !state.busy;
+  dom.follow.hidden = !state.busy;
+  dom.steer.disabled = !canSend;
+  dom.follow.disabled = !canSend;
+
+  // 技能按钮只看 cwd：还没选会话时也得能进管理界面（管理弹窗按 cwd 走，跟会话无关）。
+  // 跑着的时候不给选：技能是按整轮注进 system prompt 的，插话吃到的是上一轮的
+  dom.skillPick.disabled = !state.cwd || state.busy;
   dom.skillChip.hidden = !state.skillChip;
   if (state.skillChip) dom.skillChip.querySelector('.skill-chip-label').textContent = state.skillChip;
+
+  dom.imagePick.disabled = !canType;
+  renderImages();
+  renderQueue();
+}
+
+// busyHint 把两个按钮的区别摆在字面上 —— 这个界面最要紧的就是别让人猜。
+// 窄面板里这行会被省略号截掉，所以短着写（完整的解释在按钮的悬停提示里）
+function busyHint() {
+  return '正在跑… · 插话：做完当前这步就看到 · 排队：这轮跑完再处理';
 }
 
 // sendParent 是「这一句接在哪儿」：只有两个地方能接 —— 当前的 tip（接着往下说）、
@@ -618,9 +656,16 @@ function branchHint() {
 // ── 发消息 ───────────────────────────────────────────────
 
 async function send() {
+  // 跑着的时候这一句不是新一轮：回车走插话，排队要点那个按钮（见 queueMessage）
+  if (state.busy) {
+    await queueMessage('steer');
+    return;
+  }
+
   const text = dom.input.value.trim();
+  const images = state.images;
   const parent = sendParent();
-  if (!text || state.busy || !state.sessionId || parent === null) return;
+  if ((!text && !images.length) || !state.sessionId || parent === null) return;
 
   refreshSkillPaths(); // 手工丢进 skills/ 的技能，这一轮就该认得出来（不等它，回来会重画）
   const entriesBefore = state.entries.length;
@@ -628,16 +673,18 @@ async function send() {
   state.sawDone = false;
   state.streamError = '';
   state.stopping = false;
+  state.notice = '';
   state.skillChip = null;
 
   // 先把用户这句画上去；服务端落盘之后发 entry 事件来认领它（见 adoptEntry）。
   // 技能名跟着一起画：不用等落盘回来，选中过就该在气泡旁边看得见
-  const userMsg = { role: 'user', blocks: [{ kind: 'text', text }] };
+  const userMsg = { role: 'user', blocks: userBlocks(text, images) };
   const userEl = renderMessage(userMsg, { skill });
   withPin(() => dom.live.append(userEl));
   state.live.push({ el: userEl, msg: userMsg });
 
   dom.input.value = '';
+  state.images = [];
   autoGrow();
   state.busy = true;
   const controller = new AbortController();
@@ -647,7 +694,14 @@ async function send() {
   let failure = '';
   try {
     await streamChat(
-      { cwd: state.cwd, sessionId: state.sessionId, parentId: parent, text, skill: skill || undefined },
+      {
+        cwd: state.cwd,
+        sessionId: state.sessionId,
+        parentId: parent,
+        text,
+        skill: skill || undefined,
+        images: encodeImages(images),
+      },
       handleEvent,
       controller.signal,
     );
@@ -677,10 +731,18 @@ async function send() {
 
   // 一句话都没落盘（409、连不上、还没跑就断了）：把打的字还回输入框，
   // 别让人重打一遍。技能选择也一样还回去 —— 被一次连不上吃掉太亏
-  if (!stopped && state.entries.length === entriesBefore && text && !dom.input.value.trim()) {
+  if (!stopped && state.entries.length === entriesBefore && (text || images.length) && !dom.input.value.trim()) {
     dom.input.value = text;
+    if (images.length) state.images = [...images, ...state.images].slice(0, MAX_IMAGES);
     autoGrow();
     if (skill && !state.skillChip) state.skillChip = skill;
+  }
+
+  // 还挂着没投递的队列条目：中止时服务端把队列丢了，连接断了则是再没人管它 ——
+  // 两种都还回输入框，排过队的东西不该凭空消失
+  if (state.queued.length) {
+    for (const item of state.queued) restoreToInput(item);
+    state.queued = [];
   }
 
   if (failure) showError(failure);
@@ -693,6 +755,209 @@ async function send() {
   // 新会话这时候才出现在列表里，标题还要再晚几秒（后台生成的）
   setTimeout(refreshProjects, 1200);
   setTimeout(refreshProjects, 6000);
+}
+
+// ── 图片 ─────────────────────────────────────────────────
+// 上限跟服务端同一套（server/chat.go 的 maxImages / maxImageRaw）。前端拦一道
+// 是为了说清是哪张、为什么 —— 撞 413/400 才知道超限就太晚了
+
+const MAX_IMAGES = 8;
+const MAX_IMAGE_BYTES = 4 << 20;
+
+// userBlocks 是一条用户消息的形状：正文 + 图。发出去和画在界面上都是它
+function userBlocks(text, images) {
+  const blocks = [];
+  if (text) blocks.push({ kind: 'text', text });
+  for (const image of images) {
+    blocks.push({ kind: 'image', imageMime: image.mime, imageBytes: image.bytes, dataUrl: image.dataUrl });
+  }
+  return blocks;
+}
+
+// encodeImages 走线时只给 base64（dataURL 逗号后面那段）：格式由服务端嗅探，
+// 前端说的 mime 不算数
+function encodeImages(images) {
+  return images.map((image) => image.dataUrl.slice(image.dataUrl.indexOf(',') + 1));
+}
+
+// addImages 收下这批文件。读成 dataURL 存着：发出去要它，画缩略图也要它
+async function addImages(files) {
+  const room = MAX_IMAGES - state.images.length;
+  const accepted = [];
+  let problem = '';
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (accepted.length >= room) {
+      problem ||= `一次最多 ${MAX_IMAGES} 张图，多的没加进来`;
+      break;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      problem ||= `「${file.name || '一张图'}」${sizeText(file.size)}，超过单张 ${MAX_IMAGE_BYTES >> 20}MB 的上限`;
+      continue;
+    }
+    accepted.push(file);
+  }
+
+  for (const file of accepted) {
+    try {
+      state.images.push({ mime: file.type, bytes: file.size, name: file.name, dataUrl: await readDataURL(file) });
+    } catch {
+      problem ||= `「${file.name || '一张图'}」读不出来`;
+    }
+  }
+
+  state.notice = problem;
+  renderComposer();
+}
+
+function readDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function sizeText(bytes) {
+  return bytes >= 1 << 20 ? `${(bytes / (1 << 20)).toFixed(1)}MB` : `${Math.round(bytes / 1024)}KB`;
+}
+
+// renderImages 画还没发出去的那几张：缩略图 + 张数
+function renderImages() {
+  dom.images.hidden = !state.images.length;
+  const nodes = state.images.map((image, index) => {
+    const chip = document.createElement('div');
+    chip.className = 'image-chip';
+    chip.title = `${image.name || '图片'} · ${sizeText(image.bytes)}`;
+
+    const img = document.createElement('img');
+    img.src = image.dataUrl;
+    img.alt = image.name || '图片';
+
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'image-chip-x';
+    drop.textContent = '×';
+    drop.setAttribute('aria-label', '拿掉这张图');
+    drop.addEventListener('click', () => {
+      state.images.splice(index, 1);
+      renderComposer();
+    });
+
+    chip.append(img, drop);
+    return chip;
+  });
+  nodes.push(span('image-count', `${state.images.length}/${MAX_IMAGES}`));
+  dom.images.replaceChildren(...nodes);
+}
+
+// ── 运行中发的话（插话 / 排队）─────────────────────────────
+
+// queueMessage 运行中发一句：不开新流，只把它排到正在跑的那一轮上。mode 是
+// 「什么时候让模型看到它」—— 插话（steer）在工具批次边界投，排队（followUp）
+// 等这轮本来要停时投。服务端投递时会在原来那条流上报一声（queued_delivered），
+// 那一刻它才变成对话里的气泡；在那之前它只挂在输入框上面的等待区里
+async function queueMessage(mode) {
+  const text = dom.input.value.trim();
+  const images = state.images;
+  if ((!text && !images.length) || !state.sessionId) return;
+  state.notice = '';
+
+  try {
+    const res = await request('POST', '/api/chat/queue', {
+      cwd: state.cwd,
+      sessionId: state.sessionId,
+      text,
+      images: encodeImages(images),
+      mode,
+    });
+    state.queued.push({ id: res.id, mode, text, images });
+    dom.input.value = '';
+    state.images = [];
+    autoGrow();
+  } catch (err) {
+    // 409 = 那一轮刚好跑完了。这句话还在输入框里，等流收完尾再发就是新一轮；
+    // 别的错（服务端挂了之类）把原话摆出来
+    state.notice = err.status === 409 ? '这一轮刚跑完 —— 再发一次就是新一轮了' : err.message;
+  }
+  renderComposer();
+}
+
+// dequeue 撤回一条还没投递的：服务端还拿着（removed）就连文本带图还回输入框；
+// 已经被投出去的（!removed）只摘 chip —— 它已经变成对话里的气泡了
+async function dequeue(item) {
+  let removed = false;
+  try {
+    ({ removed } = await request('POST', '/api/chat/dequeue', {
+      cwd: state.cwd,
+      sessionId: state.sessionId,
+      id: item.id,
+    }));
+  } catch {
+    // 问不到服务端就当它已经投出去了：至少别在界面上留个撤不掉的幽灵
+  }
+  state.queued = state.queued.filter((queued) => queued !== item);
+  if (removed) restoreToInput(item);
+  renderComposer();
+}
+
+// restoreToInput 把一条还没投递的消息还回输入框：撤回了、或者这一轮中止/断了
+// 再没人管它了。文字接在现有内容后面，图并回缩略图行（上限照旧）
+function restoreToInput(item) {
+  if (item.text) {
+    dom.input.value = dom.input.value.trim() ? `${dom.input.value}\n${item.text}` : item.text;
+  }
+  if (item.images.length) {
+    state.images = [...item.images, ...state.images].slice(0, MAX_IMAGES);
+  }
+  autoGrow();
+}
+
+// deliverQueued 排队的那条投出去了：chip 摘掉，按它落地的位置画成对话里的气泡。
+// 本地那份带着图的 dataURL（服务端发来的消息里只有形状），所以按本地的画；
+// 之后落盘的 entry 事件会照旧认领它（adoptEntry 按角色顺序对得上）
+function deliverQueued(event) {
+  const index = state.queued.findIndex((item) => item.id === event.queueId);
+  const item = index >= 0 ? state.queued.splice(index, 1)[0] : null;
+
+  const msg = item
+    ? { role: 'user', blocks: userBlocks(item.text, item.images) }
+    : { role: 'user', blocks: event.message?.blocks || [] };
+  const element = renderMessage(msg, {});
+  withPin(() => dom.live.append(element));
+  state.live.push({ el: element, msg });
+  renderComposer();
+}
+
+// renderQueue 画排着队的那几条
+function renderQueue() {
+  dom.queue.hidden = !state.queued.length;
+  dom.queue.replaceChildren(...state.queued.map((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'queue-chip' + (item.mode === 'steer' ? ' queue-chip--steer' : '');
+
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'queue-chip-x';
+    drop.textContent = '×';
+    drop.title = '撤回这一句（还没投递就还回输入框）';
+    drop.addEventListener('click', () => dequeue(item));
+
+    chip.append(
+      span('queue-chip-mode', item.mode === 'steer' ? '⚡ 插话' : '⏳ 排队'),
+      span('queue-chip-text', queueLabel(item)),
+      drop,
+    );
+    return chip;
+  }));
+}
+
+// queueLabel 是 chip 上那行字：只发了图的话没有正文可写
+function queueLabel(item) {
+  const text = clip(item.text, 60);
+  if (text) return item.images.length ? `${text}（图 ${item.images.length}）` : text;
+  return `图 ${item.images.length} 张`;
 }
 
 function handleEvent(event) {
@@ -729,6 +994,9 @@ function handleEvent(event) {
       break;
     case 'entry':
       adoptEntry(event.entry);
+      break;
+    case 'queued_delivered':
+      deliverQueued(event);
       break;
     case 'error':
       // 先攒着，等这一轮收尾、按服务端重画之后再显示 ——
@@ -851,13 +1119,13 @@ function adoptEntry(entry) {
   const stay = pinned();
   if (live) {
     live.el.dataset.entryId = entry.id;
-    updateMessage(live.el, entry.message || {}, { skill: entry.skill });
+    updateMessage(live.el, entry.message || {}, { skill: entry.skill, entryId: entry.id });
     dom.history.append(live.el);
   } else if (entry.compaction) {
     // 压缩点没有正文，画的是一段摘要
     dom.history.append(renderCompaction(entry));
   } else {
-    dom.history.append(renderMessage(entry.message || {}, { skill: entry.skill }));
+    dom.history.append(renderMessage(entry.message || {}, { skill: entry.skill, entryId: entry.id }));
   }
   if (stay) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
 
@@ -891,6 +1159,7 @@ function autoGrow() {
 }
 
 dom.input.addEventListener('input', () => {
+  state.notice = ''; // 又动手打字了，上一句提示该让位了
   autoGrow();
   renderComposer();
 });
@@ -907,6 +1176,44 @@ dom.composer.addEventListener('submit', (event) => {
   event.preventDefault();
   send();
 });
+
+// ── 图片的三条入口：粘贴、拖进来、选文件 ─────────────────
+
+dom.input.addEventListener('paste', (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
+  if (!files.length) return; // 没图就照旧粘贴文本，别拦
+  event.preventDefault();
+  // 图文一起粘的（比如从网页上复制）：文字别丢
+  const text = event.clipboardData.getData('text/plain');
+  if (text) dom.input.setRangeText(text, dom.input.selectionStart, dom.input.selectionEnd, 'end');
+  addImages(files);
+});
+
+dom.imagePick.addEventListener('click', () => dom.imageFile.click());
+dom.imageFile.addEventListener('change', () => {
+  addImages(dom.imageFile.files);
+  dom.imageFile.value = ''; // 清掉才能再选同一个文件
+});
+
+// 拖拽落在整页上都要挡一道：不挡的话浏览器会直接打开那张图，界面就没了
+for (const type of ['dragover', 'drop']) {
+  document.addEventListener(type, (event) => event.preventDefault());
+}
+dom.composer.addEventListener('dragover', () => dom.composer.classList.add('is-dropping'));
+dom.composer.addEventListener('dragleave', (event) => {
+  // 掠过子元素也会报 dragleave，落在 composer 里面就不算离开
+  if (event.relatedTarget && dom.composer.contains(event.relatedTarget)) return;
+  dom.composer.classList.remove('is-dropping');
+});
+dom.composer.addEventListener('drop', (event) => {
+  dom.composer.classList.remove('is-dropping');
+  addImages(event.dataTransfer?.files || []);
+});
+
+// ── 运行中的两个动作：插话 / 排队 ─────────────────────────
+
+dom.steer.addEventListener('click', () => queueMessage('steer'));
+dom.follow.addEventListener('click', () => queueMessage('followUp'));
 
 // 「停止」是让服务端把那停一轮（走端点），不是把连接掐了：掐连接的话
 // 客户端不知道服务端什么时候收完尾，重读会读到落盘落了一半的状态

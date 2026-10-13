@@ -3,9 +3,11 @@
 
 import { roleLabel, argsPreview, clip, numTokens } from './shared.js';
 
-export function renderMessage(msg, { streaming = false, folded = false, skill = '' } = {}) {
+// 参数原样转给 updateMessage：多一个字段（比如 entryId）就不用两边都改一遍 ——
+// 少改一边的话，落盘的图片气泡会悄悄退回占位文字，谁都不报错
+export function renderMessage(msg, opts = {}) {
   const el = document.createElement('div');
-  updateMessage(el, msg, { streaming, folded, skill });
+  updateMessage(el, msg, opts);
   return el;
 }
 
@@ -42,8 +44,9 @@ export function renderCompaction(entry, { folded = false } = {}) {
 
 // updateMessage 整条重画：头（角色 / 用量 / 中止标记）和体都重建。
 // 流式那几帧会反复调它，而用量、中止标记、错误边框都是落盘之后才有的东西 ——
-// 只在建元素时算一次的话，这一轮刚跑完就是错的，得刷新页面才对
-export function updateMessage(el, msg, { streaming = false, folded = false, skill = '' } = {}) {
+// 只在建元素时算一次的话，这一轮刚跑完就是错的，得刷新页面才对。
+// entryId 是图片要的：落盘的图得靠 entry + 块下标去 /api/image 取
+export function updateMessage(el, msg, { streaming = false, folded = false, skill = '', entryId = '' } = {}) {
   el.className = `msg msg--${messageKind(msg)}` + (folded ? ' is-folded' : '');
 
   const head = document.createElement('div');
@@ -81,7 +84,7 @@ export function updateMessage(el, msg, { streaming = false, folded = false, skil
 
   const body = document.createElement('div');
   body.className = 'msg-body';
-  fillBody(body, msg, streaming);
+  fillBody(body, msg, streaming, entryId);
   el.replaceChildren(head, body);
 }
 
@@ -99,10 +102,10 @@ function messageKind(msg) {
   return msg.role;
 }
 
-function fillBody(body, msg, streaming) {
+function fillBody(body, msg, streaming, entryId) {
   if (msg.role === 'tool_result' || msg.role === 'error') {
     // 工具结果就是一段机器输出，原样给，不走正文那套
-    body.replaceChildren(toolResultBlock(msg.blocks || [], msg.isError));
+    body.replaceChildren(toolResultBlock(msg.blocks || [], msg.isError, entryId));
     return;
   }
 
@@ -118,7 +121,7 @@ function fillBody(body, msg, streaming) {
     } else if (block.kind === 'tool') {
       children.push(toolCallBlock(block, { running: streaming && isLast }));
     } else if (block.kind === 'image') {
-      children.push(imageBlock(block));
+      children.push(imageBlock(block, { entryId, index }));
     }
   });
 
@@ -206,8 +209,8 @@ function toolCallBlock(block, { running }) {
   return wrap;
 }
 
-// 工具结果：文本原样给（长了自己滚），图片只给形状 —— 接口本来就不带图内容
-export function toolResultBlock(blocks, isError) {
+// 工具结果：文本原样给（长了自己滚），图片画出来 —— 模型看到的图，用户也该看到
+export function toolResultBlock(blocks, isError, entryId = '') {
   const wrap = document.createElement('div');
   wrap.className = 'tool-result' + (isError ? ' is-error' : '');
   const text = blocks.filter((b) => b.kind === 'text').map((b) => b.text).join('\n');
@@ -217,17 +220,52 @@ export function toolResultBlock(blocks, isError) {
     out.textContent = text.trim();
     wrap.append(out);
   }
-  for (const block of blocks.filter((b) => b.kind === 'image')) {
-    wrap.append(imageBlock(block));
-  }
+  blocks.forEach((block, index) => {
+    if (block.kind === 'image') wrap.append(imageBlock(block, { entryId, index }));
+  });
   return wrap;
 }
 
-function imageBlock(block) {
-  const el = document.createElement('span');
-  el.className = 'tool-image';
-  el.textContent = `图片 ${block.imageMime || ''} ${byteSize(block.imageBytes)}`;
-  return el;
+// imageCtx 是取图要的会话定位（app.js 灌进来，跟 skillPaths 一个路子）。
+// 一张图几百 KB，整棵树的接口故意不带内容（见 dto.go），所以图是现取的
+let imageCtx = { cwd: '', sessionId: '' };
+
+export function setImageCtx(ctx) {
+  imageCtx = ctx || { cwd: '', sessionId: '' };
+}
+
+// imageBlock 画一张图。还没落盘的消息带着本地 dataURL（用户刚发的那张，
+// 服务端还没存）；落盘的靠 entry + 块下标现取。两样都没有就退回一行占位文字
+function imageBlock(block, { entryId = '', index = 0 } = {}) {
+  const src = block.dataUrl || (entryId ? imageURL(entryId, index) : '');
+  if (!src) {
+    const el = document.createElement('span');
+    el.className = 'tool-image';
+    el.textContent = `图片 ${block.imageMime || ''} ${byteSize(block.imageBytes)}`;
+    return el;
+  }
+
+  const link = document.createElement('a');
+  link.className = 'msg-image';
+  link.href = src;
+  link.target = '_blank';
+  link.rel = 'noreferrer';
+  link.title = `${block.imageMime || ''} ${byteSize(block.imageBytes)}（点开看原图）`;
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = block.imageMime || '图片';
+  link.append(img);
+  return link;
+}
+
+function imageURL(entryId, index) {
+  const query = new URLSearchParams({
+    cwd: imageCtx.cwd || '',
+    id: imageCtx.sessionId || '',
+    entry: entryId,
+    block: String(index),
+  });
+  return `/api/image?${query}`;
 }
 
 function byteSize(bytes) {

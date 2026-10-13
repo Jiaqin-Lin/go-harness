@@ -26,6 +26,10 @@ type wireEvent struct {
 	Message *messageDTO `json:"message,omitempty"`
 	Entry   *entryDTO   `json:"entry,omitempty"`
 
+	// QueueID 是 queued_delivered 专用：排队的那条消息投递出去了，
+	// 前端拿它对上自己手里那条 chip（见 server/queue.go）
+	QueueID string `json:"queueId,omitempty"`
+
 	Error string `json:"error,omitempty"`
 }
 

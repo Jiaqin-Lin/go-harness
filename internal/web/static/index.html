@@ -64,8 +64,13 @@
       </div>
 
       <form class="composer" id="composer">
+        <!-- 排队中/已投递的等待区：运行中发的话先落在这儿，投递了才变成对话里的气泡 -->
+        <div class="composer-queue" id="composer-queue" hidden></div>
+        <div class="composer-images" id="composer-images" hidden></div>
         <div class="composer-skills">
           <button type="button" class="btn btn-ghost btn-small" id="skill-pick" title="选一个技能，只对下一条消息生效">技能</button>
+          <button type="button" class="btn btn-ghost btn-small" id="image-pick" title="加图片（也可以直接粘贴或者拖进来）">图片</button>
+          <input type="file" id="image-file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" multiple hidden>
           <button type="button" class="skill-chip" id="skill-chip" hidden title="这一轮必须用这个技能，点 × 取消">
             <span class="skill-chip-label"></span><span class="skill-chip-x" aria-hidden="true">×</span>
           </button>
@@ -75,6 +80,12 @@
         <div class="composer-foot">
           <span class="composer-hint" id="composer-hint"></span>
           <span class="composer-actions">
+            <!-- 跑着的时候这一句不是新一轮，而是往正在跑的那一轮里塞。两个按钮就是
+                 两种塞法，按哪个发生哪个 —— 没有额外的「模式」开关 -->
+            <button type="button" class="btn btn-primary btn-small" id="queue-steer" hidden
+              title="插话：模型做完当前这一步就能看到这句话（跑着的时候按回车也是它）">⚡ 插话</button>
+            <button type="button" class="btn btn-ghost btn-small" id="queue-follow" hidden
+              title="排队：等这一轮整个跑完，这句话再作为新一轮处理">⏳ 排队</button>
             <button type="button" class="btn btn-ghost btn-small" id="composer-stop" hidden>停止</button>
             <button type="submit" class="btn btn-primary btn-small" id="composer-send" disabled>发送</button>
           </span>

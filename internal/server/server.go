@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/web"
@@ -24,6 +25,14 @@ type Config struct {
 	Generate provider.GenerateFunction
 }
 
+// run 是「正在跑的那一轮」在服务进程里的样子。除了点「停止」用的取消函数，
+// 它还挂着这一轮的队列：跑着的时候用户塞进来的消息排在这儿，等 loop 在工具批次
+// 边界（或这一轮本来要停时）来取（见 internal/core 的 Queues）
+type run struct {
+	cancel context.CancelFunc
+	queue  messageQueue
+}
+
 type Server struct {
 	cfg Config
 
@@ -31,16 +40,17 @@ type Server struct {
 	// 再来一条直接 409 —— 两条支路同时往一个文件里追加会写乱
 	mu        sync.Mutex
 	boundPort int // Listen 真正绑上的端口，Host 白名单用
-	running   map[sessionKey]bool
-	cancels   map[sessionKey]context.CancelFunc // 正在跑的那一轮的取消函数，给 /api/chat/abort 用
-	titles    map[string]bool                   // 正在生成标题的会话文件，别为同一个会话付两次钱
+	running   map[sessionKey]*run
+	titles    map[string]bool // 正在生成标题的会话文件，别为同一个会话付两次钱
+
+	// seq 给排队消息发认领凭据。只在一次 run 里要唯一，够用
+	seq atomic.Uint64
 }
 
 func New(cfg Config) *Server {
 	return &Server{
 		cfg:     cfg,
-		running: map[sessionKey]bool{},
-		cancels: map[sessionKey]context.CancelFunc{},
+		running: map[sessionKey]*run{},
 		titles:  map[string]bool{},
 	}
 }

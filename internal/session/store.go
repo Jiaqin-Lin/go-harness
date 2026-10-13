@@ -132,6 +132,20 @@ func WriteTitle(path, title string) error {
 	return os.Rename(tmp, titlePath(path))
 }
 
+// MessagePreview 是一条用户消息给侧栏看的样子。只发了图、没写字的消息正文是空的，
+// 显示成空串看起来像条坏消息 —— 给个「[图片]」
+func MessagePreview(msg *types.Message) string {
+	if text := msg.Text(); text != "" {
+		return text
+	}
+	for _, block := range msg.ContentBlocks {
+		if block.Kind == types.ImageBlock {
+			return "[图片]"
+		}
+	}
+	return ""
+}
+
 // FirstUserText 返回第一条用户消息的正文，给侧栏当兜底标题（标题还没生成时
 // 显示它）。读到就停：绝大多数会话第二行就是它。
 // 一律 ReadBytes 不用 Scanner —— 单行上限 64KB，而消息里可能带 base64 图片
@@ -149,7 +163,7 @@ func FirstUserText(path string) string {
 			var entry Entry
 			if json.Unmarshal(trimmed, &entry) == nil && entry.Message != nil {
 				if entry.Message.Role == types.UserRole {
-					return entry.Message.Text()
+					return MessagePreview(entry.Message)
 				}
 			}
 		}

@@ -93,7 +93,7 @@ func isBmp(head []byte) bool {
 	return planes == 1 && slices.Contains([]int{1, 4, 8, 16, 24, 32}, int(bits))
 }
 
-type imagePayload struct {
+type ImagePayload struct {
 	Data   string // base64
 	Mime   string
 	Width  int
@@ -105,17 +105,32 @@ type imagePayload struct {
 	OriginalHeight int
 }
 
+// Block 是图片挂进消息里的形状
+func (p ImagePayload) Block() types.ContentBlock {
+	return types.ContentBlock{Kind: types.ImageBlock, ImageMime: p.Mime, ImageData: p.Data}
+}
+
+// ImageFromBytes 把一段图片字节变成 ImageBlock：嗅探出格式再交给 processImage。
+// read 工具和用户发图共用它，上限天然一致
+func ImageFromBytes(raw []byte) (ImagePayload, error) {
+	mime := imageMime(raw)
+	if mime == "" {
+		return ImagePayload{}, errors.New("认不出这是什么图片格式（支持 png、jpeg、gif、webp、bmp）")
+	}
+	return processImage(raw, mime)
+}
+
 // processImage 把图片字节变成能直接放进 ImageBlock 的东西。
 // 尺寸和体积都在上限内就原样用它（不重新编码，GIF 还能保住动画），超了就缩放重编码
-func processImage(raw []byte, mime string) (imagePayload, error) {
+func processImage(raw []byte, mime string) (ImagePayload, error) {
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return imagePayload{}, fmt.Errorf("按 %s 解不开：%w", mime, err)
+		return ImagePayload{}, fmt.Errorf("按 %s 解不开：%w", mime, err)
 	}
 
 	width, height := src.Bounds().Dx(), src.Bounds().Dy()
 	if width <= maxImageWidth && height <= maxImageHeight && encodedLen(len(raw)) < maxImageBase64 {
-		return imagePayload{
+		return ImagePayload{
 			Data: base64.StdEncoding.EncodeToString(raw), Mime: mime,
 			Width: width, Height: height,
 			OriginalWidth: width, OriginalHeight: height,
@@ -127,17 +142,17 @@ func processImage(raw []byte, mime string) (imagePayload, error) {
 	for {
 		data, outMime, ok, err := shrinkTo(src, width, height)
 		if err != nil {
-			return imagePayload{}, err
+			return ImagePayload{}, err
 		}
 		if ok {
-			return imagePayload{
+			return ImagePayload{
 				Data: data, Mime: outMime, Width: width, Height: height,
 				Resized:       true,
 				OriginalWidth: src.Bounds().Dx(), OriginalHeight: src.Bounds().Dy(),
 			}, nil
 		}
 		if width == 1 && height == 1 {
-			return imagePayload{}, errors.New("缩到 1x1 还是超过体积上限")
+			return ImagePayload{}, errors.New("缩到 1x1 还是超过体积上限")
 		}
 		width, height = max(1, width*3/4), max(1, height*3/4)
 	}
@@ -220,6 +235,6 @@ func readImage(r io.Reader, path, mime string) (types.ToolResult, error) {
 
 	return types.ToolResult{ContentBlock: []types.ContentBlock{
 		types.NewTextBlock(note),
-		{Kind: types.ImageBlock, ImageMime: payload.Mime, ImageData: payload.Data},
+		payload.Block(),
 	}}, nil
 }

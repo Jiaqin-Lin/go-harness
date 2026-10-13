@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/session", s.handleSessionDelete)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
 	mux.HandleFunc("POST /api/chat/abort", s.handleChatAbort)
+	mux.HandleFunc("POST /api/chat/queue", s.handleChatQueue)
+	mux.HandleFunc("POST /api/chat/dequeue", s.handleChatDequeue)
+	mux.HandleFunc("GET /api/image", s.handleImage)
 	mux.HandleFunc("GET /api/skills", s.handleSkills)
 	mux.HandleFunc("POST /api/skills/enable", s.handleSkillEnable)
 	mux.HandleFunc("DELETE /api/skills", s.handleSkillDelete)
@@ -208,10 +213,48 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 func firstUserText(sess *session.Session) string {
 	for _, entry := range sess.Entries() {
 		if entry.Message != nil && entry.Message.Role == types.UserRole {
-			return entry.Message.Text()
+			return session.MessagePreview(entry.Message)
 		}
 	}
 	return ""
+}
+
+// handleImage 把某个 entry 里某个图片块的内容交出去。树接口不给图片内容
+// （一张图几百 KB，整棵树带上首屏就是几 MB，见 dto.go），界面就靠这个端点把图
+// 显示出来 —— 用户发的和模型 read 到的都走它。entry 落盘之后不再变，缓存可以给到底
+func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
+	_, sess, err := s.openSession(r.URL.Query().Get("cwd"), r.URL.Query().Get("id"))
+	if err != nil {
+		fail(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+
+	entryID := r.URL.Query().Get("entry")
+	entry := sess.Entry(entryID)
+	if entry == nil || entry.Message == nil {
+		fail(w, http.StatusNotFound, "这个会话里没有 entry %s", entryID)
+		return
+	}
+
+	index, err := strconv.Atoi(r.URL.Query().Get("block"))
+	if err != nil || index < 0 || index >= len(entry.Message.ContentBlocks) {
+		fail(w, http.StatusNotFound, "entry %s 里没有第 %d 个块", entryID, index)
+		return
+	}
+	block := entry.Message.ContentBlocks[index]
+	if block.Kind != types.ImageBlock {
+		fail(w, http.StatusNotFound, "entry %s 的第 %d 个块不是图片", entryID, index)
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(block.ImageData)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "图片数据坏了：%v", err)
+		return
+	}
+	w.Header().Set("Content-Type", block.ImageMime)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Write(data)
 }
 
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
