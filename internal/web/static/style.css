@@ -1,35 +1,43 @@
 /* go-harness web
-   一个中性灰（冷灰）打底的工具界面，只有一个强调色，只用在
-   「选中 / 当前 / 主操作」上。圆角只有三档：--r-lg 面板、--r-md 卡片与控件、
-   --r-sm 小标记，全站不越界。字体走系统栈，不引外链 */
+   暖纸底 + 陶土橙一个强调色，claude.ai 那个调子：面板是纸（--surface），
+   画布和凹陷处是燕麦（--bg / --sunk）。衬线只给两处大字（品牌词、画布空态）。
+   圆角还是三档：--r-lg 面板、--r-md 卡片与控件、--r-sm 小标记，全站不越界。
+   字体走系统栈，不引外链 */
 
 :root {
   color-scheme: dark;
 
-  --bg:      #0c0d0f;
-  --surface: #121316;
-  --raised:  #17181d;
-  --sunk:    #08090a;
+  --bg:      #1b1a18;
+  --surface: #262624;
+  --raised:  #30302e;
+  --sunk:    #1e1d1b;
+  --field:   #30302e;
 
-  --line:    rgba(255, 255, 255, .07);
-  --line-2:  rgba(255, 255, 255, .13);
+  --line:    #3a3835;
+  --line-2:  #4c4945;
 
-  --text:    #e7e8ec;
-  --text-2:  #9b9da6;
-  --text-3:  #6a6c75;
+  --text:    #f0eee8;
+  --text-2:  #b0ada4;
+  --text-3:  #918e85;
 
-  --accent:      #6aa8e8;
-  --accent-ink:  #0b1017;
-  --accent-soft: rgba(106, 168, 232, .14);
+  --accent:       #de8365;
+  --accent-hover: #e8916f;
+  --accent-ink:   #1f1e1d;
+  --accent-soft:  rgba(222, 131, 101, .14);
 
-  --danger:      #e08a80;
-  --danger-soft: rgba(224, 138, 128, .12);
+  --danger:      #e0968b;
+  --danger-soft: rgba(224, 150, 139, .12);
 
-  --r-lg: 14px;
+  --scrim: rgb(0 0 0 / .55);
+
+  --r-lg: 16px;
   --r-md: 10px;
   --r-sm: 6px;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 衬线只给品牌词和画布空态两处大字：西文落在 Iowan/Charter 这
+     一支书卷体上，中文落到宋体 */
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, "Songti SC", "Noto Serif SC", "Source Han Serif SC", serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   --sidebar-w: 264px;
@@ -40,24 +48,28 @@
   :root {
     color-scheme: light;
 
-    --bg:      #f6f6f8;
-    --surface: #fdfdfe;
-    --raised:  #f1f1f4;
-    --sunk:    #eeeef1;
+    --bg:      #f0eee6;
+    --surface: #faf9f5;
+    --raised:  #ece9df;
+    --sunk:    #f0eee6;
+    --field:   #ffffff;
 
-    --line:    rgba(20, 22, 28, .09);
-    --line-2:  rgba(20, 22, 28, .18);
+    --line:    #e6e3d8;
+    --line-2:  #d5d1c3;
 
-    --text:    #1a1c21;
-    --text-2:  #5c6069;
-    --text-3:  #8b8f98;
+    --text:    #1f1e1d;
+    --text-2:  #5a5750;
+    --text-3:  #6d6a62;
 
-    --accent:      #2f6fbe;
-    --accent-ink:  #fbfcfe;
-    --accent-soft: rgba(47, 111, 190, .10);
+    --accent:       #a94e31;
+    --accent-hover: #96432a;
+    --accent-ink:   #ffffff;
+    --accent-soft:  rgba(169, 78, 49, .12);
 
-    --danger:      #b4443a;
-    --danger-soft: rgba(180, 68, 58, .09);
+    --danger:      #a83a30;
+    --danger-soft: rgba(168, 58, 48, .10);
+
+    --scrim: rgb(40 35 30 / .32);
   }
 }
 
@@ -161,7 +173,7 @@ body {
   color: var(--accent-ink);
   font-weight: 500;
 }
-.btn-primary:hover { background: var(--accent); color: var(--accent-ink); filter: brightness(1.06); }
+.btn-primary:hover { background: var(--accent-hover); color: var(--accent-ink); }
 
 .btn-small { padding: 4px 9px; font-size: 12px; }
 .btn-icon { width: 26px; height: 26px; padding: 0; border-radius: var(--r-md); font-size: 15px; line-height: 1; }
@@ -187,7 +199,7 @@ body {
   justify-content: space-between;
   padding: 12px 12px 12px 16px;
 }
-.wordmark { font-size: 12px; letter-spacing: .04em; color: var(--text-2); }
+.wordmark { font: 400 16px/1 var(--serif); color: var(--text); }
 
 .project-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 16px; }
 
@@ -230,7 +242,8 @@ body {
   cursor: pointer;
 }
 .session-row:hover { background: var(--raised); color: var(--text); }
-.session-row.is-active { background: var(--accent-soft); color: var(--text); border-color: var(--line); }
+/* 当前这条用强调色的淡底：hover 的暖灰和它一眼能分开 */
+.session-row.is-active { background: var(--accent-soft); color: var(--text); }
 
 .session-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta { display: block; font-size: 11px; color: var(--text-3); margin-top: 1px; }
@@ -410,6 +423,8 @@ body {
   padding: 24px;
   text-align: center;
 }
+/* 画布空态是全站唯一的大字排场：衬线标题 + 一行说明，像 claude.ai 的问候语 */
+.graph-empty .empty-title { font: 400 21px/1.35 var(--serif); margin-bottom: 10px; }
 /* ── 右栏对话 ─────────────────────────────────────────── */
 
 .chat {
@@ -436,10 +451,10 @@ body {
 #session-delete { opacity: 0; }
 .chat-head:hover #session-delete, #session-delete:focus-visible { opacity: 1; }
 
-.chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px 8px; display: flex; flex-direction: column; gap: 14px; }
+.chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 16px; }
 /* history 是「根 → 选中节点」那条路径，live 是正在跑的这一轮。
    落盘之后，元素从 live 挪进 history，内容一格都不动 */
-.chat-history, .chat-live { display: flex; flex-direction: column; gap: 14px; }
+.chat-history, .chat-live { display: flex; flex-direction: column; gap: 16px; }
 .chat-history:empty, .chat-live:empty { display: none; }
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
@@ -450,16 +465,15 @@ body {
 .msg-note { color: var(--text-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; }
 .msg--error .msg-note { color: var(--danger); }
 
+/* 助手的话直接铺在面板上（无气泡），用户那句才给底色 —— 对话区像 claude.ai */
 .bubble {
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: 10px 12px;
-  background: var(--bg);
+  font-size: 14px;
+  line-height: 1.65;
   overflow-wrap: anywhere;
 }
-.msg--user .bubble { background: var(--raised); border-color: var(--line-2); }
+.msg--user .bubble { background: var(--raised); border-radius: var(--r-lg); padding: 10px 14px; }
 .msg--user .bubble p:first-child { margin-top: 0; }
-.msg--error .bubble { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); color: var(--danger); }
+.msg--error .bubble { border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line)); border-radius: var(--r-md); padding: 10px 12px; background: var(--danger-soft); color: var(--danger); }
 
 /* 压缩点：左边一条实线，跟正文和其他折叠块区分开 */
 .msg--compaction .thinking { border-style: solid; border-left: 2px solid var(--accent); color: var(--text-2); }
@@ -477,12 +491,12 @@ body {
 .bubble p:last-child { margin-bottom: 0; }
 .bubble pre { margin: 0 0 8px; padding: 9px 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r-sm); overflow-x: auto; }
 .bubble pre:last-child { margin-bottom: 0; }
-.bubble code { font-family: var(--mono); font-size: 11.5px; }
-.bubble :not(pre) > code { background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 4px; }
+.bubble code { font-family: var(--mono); font-size: 12.5px; }
+.bubble :not(pre) > code { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 4px; }
 .bubble ul, .bubble ol { margin: 0 0 8px; padding-left: 18px; }
 .bubble li { margin: 2px 0; }
 .bubble a { color: var(--accent); }
-.bubble h1, .bubble h2, .bubble h3 { font-size: 13px; margin: 0 0 6px; }
+.bubble h1, .bubble h2, .bubble h3 { font-size: 15px; margin: 0 0 6px; }
 .bubble h1:not(:first-child), .bubble h2:not(:first-child), .bubble h3:not(:first-child) { margin-top: 12px; }
 
 .thinking { border: 1px dashed var(--line-2); border-radius: var(--r-md); padding: 8px 10px; color: var(--text-3); font-size: 12px; }
@@ -497,7 +511,7 @@ body {
   border-radius: var(--r-md);
   background: var(--sunk);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   overflow: hidden;
 }
 .tool-line { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--text-2); }
@@ -590,7 +604,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
-  box-shadow: 0 14px 34px -18px color-mix(in srgb, var(--sunk) 80%, transparent);
+  box-shadow: 0 14px 34px -18px var(--scrim);
 }
 
 .skill-menu-item {
@@ -656,7 +670,7 @@ body {
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  background: var(--bg);
+  background: var(--field);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   padding: 6px 8px;
@@ -668,22 +682,25 @@ body {
   font: inherit;
   font-size: 12px;
   color: var(--text);
-  background: var(--bg);
+  background: var(--field);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   padding: 4px 6px;
 }
 
+/* 输入框是这块界面上最亮的一件东西（claude.ai 的输入框也是），
+   所以给 --field 而不是面板色 */
 #composer-input {
   display: block;
   width: 100%;
   resize: none;
   border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--bg);
+  border-radius: var(--r-lg);
+  background: var(--field);
   color: var(--text);
   font: inherit;
-  padding: 9px 10px;
+  font-size: 13.5px;
+  padding: 9px 12px;
   max-height: 40vh;
   overflow-y: auto;
 }
@@ -704,7 +721,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--sunk) 62%, transparent);
+  background: var(--scrim);
 }
 .modal-panel {
   width: min(520px, 100%);
@@ -714,7 +731,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
-  box-shadow: 0 18px 50px -20px color-mix(in srgb, var(--sunk) 80%, transparent);
+  box-shadow: 0 18px 50px -20px var(--scrim);
   overflow: hidden;
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--line); }
