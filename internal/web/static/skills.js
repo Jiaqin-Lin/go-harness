@@ -68,15 +68,17 @@ export class SkillMenu {
     });
   }
 
-  async toggle(cwd) {
+  async toggle(cwd, opts) {
     if (!this.root.hidden) {
       this.close();
       return;
     }
-    await this.open(cwd);
+    await this.open(cwd, opts);
   }
 
-  async open(cwd) {
+  // canPick=false（现在看的是历史节点）：技能项列出来但点不了 —— 换个节点
+  // 再回最后一个节点就能选。管理技能不受影响
+  async open(cwd, { canPick = true } = {}) {
     this.root.hidden = false;
     this.root.replaceChildren(note('正在读技能…'));
 
@@ -94,6 +96,8 @@ export class SkillMenu {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'skill-menu-item';
+      row.disabled = !canPick;
+      if (!canPick) row.title = '看的是历史节点 —— 回到最后一个节点才能选技能';
       row.append(skillItem(skill, skill.scope === 'project' ? [badge('项目', 'project')] : []));
       row.addEventListener('click', () => {
         this.close();
@@ -111,7 +115,8 @@ export class SkillMenu {
       this.onManage();
     });
 
-    this.root.replaceChildren(...items, manage);
+    const hint = canPick ? [] : [note('看的是历史节点 —— 回到最后一个节点才能选技能')];
+    this.root.replaceChildren(...hint, ...items, manage);
   }
 
   close() {

@@ -271,18 +271,10 @@ func TestListOnlyReturnsSessionsOfThatCwd(t *testing.T) {
 	home := setHome(t)
 	cwd, other := t.TempDir(), t.TempDir()
 
+	// 名字的形状：--<路径的可读编码>-<cwd 指纹>--，可读那半段照 pi 的规则编
 	if dir, err := dirFor("/Users/reuben/x"); err != nil {
 		t.Fatalf("算目录失败：%v", err)
-	} else if want := filepath.Join(home, ".go-harness", "sessions", "--Users-reuben-x--"); dir != want {
-		t.Fatalf("目录编码不对：\n期望 %s\n实际 %s", want, dir)
-	}
-
-	dir, err := dirFor(cwd)
-	if err != nil {
-		t.Fatalf("算目录失败：%v", err)
-	}
-	want := filepath.Join(home, ".go-harness", "sessions", "--"+strings.ReplaceAll(strings.TrimPrefix(cwd, "/"), "/", "-")+"--")
-	if dir != want {
+	} else if want := filepath.Join(home, ".go-harness", "sessions", "--Users-reuben-x-"+cwdHash("/Users/reuben/x")+"--"); dir != want {
 		t.Fatalf("目录编码不对：\n期望 %s\n实际 %s", want, dir)
 	}
 
@@ -471,6 +463,161 @@ func TestFindDeleteAndTitle(t *testing.T) {
 			t.Errorf("%s 该被删掉：%v", gone, err)
 		}
 	}
+	// 一条条删会话不收目录：这个 cwd 多半还会再用，收拾整个目录是 DeleteAll 的事
+	if _, err := os.Stat(filepath.Dir(s.Path())); err != nil {
+		t.Errorf("删单条会话不该动目录：%v", err)
+	}
+}
+
+// DeleteAll 删光一个 cwd 的会话，目录跟着收掉；同目录里住着的别的项目
+// （`/a/b` 和 `/a-b` 编出来是同一个目录名）一条都不能碰，那种情况下目录也不能收
+// 目录里混着别人的会话文件时（老命名留下的，还没迁走），DeleteAll 只删自己那些、
+// 目录也收不掉 —— 按 header 认人这层兜底不因为改了命名就作废
+func TestDeleteAllLeavesForeignFilesAlone(t *testing.T) {
+	setHome(t)
+	cwd := "/a/b"
+
+	s, err := CreateWithID(cwd, "aaaa1111bbbb2222")
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	if _, err := s.Append(userMessage("我的")); err != nil {
+		t.Fatalf("落盘失败：%v", err)
+	}
+	dir, err := dirFor(cwd)
+	if err != nil {
+		t.Fatalf("算目录失败：%v", err)
+	}
+
+	// 手动往这个目录里塞一份「别人家的」会话：header 里写的是另一个 cwd
+	foreign := filepath.Join(dir, "2026-10-13T00-00-00-000Z_cccc3333dddd4444.jsonl")
+	line := `{"type":"session","version":1,"id":"cccc3333dddd4444","timestamp":"2026-10-13T00:00:00.000Z","cwd":"/a-b"}` + "\n" +
+		entryLine(t, "c0000001", "", "别人的") + "\n"
+	if err := os.WriteFile(foreign, []byte(line), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	n, err := DeleteAll(cwd)
+	if err != nil || n != 1 {
+		t.Fatalf("该删掉 1 条，实际 %d 条，err=%v", n, err)
+	}
+	if _, err := Find(cwd, s.ID()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("删过的会话还找得到：%v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("别人的会话文件不该被删：%v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("目录里还有别人的东西时不该被收掉：%v", err)
+	}
+}
+
+// 老命名（没有指纹）下的会话，按文件自己的 header 各归各位；读不出来的文件
+// 原地不动。重复跑不会再多搬一次
+func TestMigrateMovesLegacyDirs(t *testing.T) {
+	home := setHome(t)
+
+	dashed, nested := "/x/a-b", "/x/a/b"
+	sessions := make(map[string]*Session)
+	for _, tc := range []struct{ cwd, id, text string }{
+		{dashed, "aaaa1111bbbb2222", "dashed 的"},
+		{nested, "cccc3333dddd4444", "nested 的"},
+	} {
+		s, err := CreateWithID(tc.cwd, tc.id)
+		if err != nil {
+			t.Fatalf("建会话失败：%v", err)
+		}
+		if _, err := s.Append(userMessage(tc.text)); err != nil {
+			t.Fatalf("落盘失败：%v", err)
+		}
+		if err := WriteTitle(s.Path(), tc.text); err != nil {
+			t.Fatalf("写标题失败：%v", err)
+		}
+		sessions[tc.cwd] = s
+	}
+
+	// 摆回老样子：两条会话挤在同一个目录里（老编码没有指纹，这俩编出来都是 --x-a-b--）
+	legacy := filepath.Join(home, ".go-harness", "sessions", "--x-a-b--")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatalf("建老目录失败：%v", err)
+	}
+	for _, s := range sessions {
+		for _, suffix := range []string{"", ".title"} {
+			from, to := s.Path()+suffix, filepath.Join(legacy, filepath.Base(s.Path())+suffix)
+			if err := os.Rename(from, to); err != nil {
+				t.Fatalf("摆老目录失败：%v", err)
+			}
+		}
+	}
+	// 一个读不出 header 的文件：搬不动的东西就该留在原地
+	junk := filepath.Join(legacy, "2026-01-01T00-00-00-000Z_ffffffffffffffff.jsonl")
+	if err := os.WriteFile(junk, []byte("这不是会话文件\n"), 0o644); err != nil {
+		t.Fatalf("写坏文件失败：%v", err)
+	}
+
+	moved, err := Migrate()
+	if err != nil || moved != 2 {
+		t.Fatalf("该搬走 2 条，实际 %d 条，err=%v", moved, err)
+	}
+
+	for cwd, s := range sessions {
+		dir, err := dirFor(cwd)
+		if err != nil {
+			t.Fatalf("算目录失败：%v", err)
+		}
+		if filepath.Dir(s.Path()) != dir {
+			t.Errorf("%s 的会话该搬到 %s，实际还在 %s", cwd, dir, filepath.Dir(s.Path()))
+		}
+		if _, err := Find(cwd, s.ID()); err != nil {
+			t.Errorf("搬完之后该找得到：%v", err)
+		}
+		if got := Title(s.Path()); got == "" {
+			t.Errorf("标题该跟着正文一起搬")
+		}
+	}
+	if _, err := os.Stat(junk); err != nil {
+		t.Errorf("读不出的文件不该被搬走或删掉：%v", err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Errorf("老目录里还有搬不动的东西，目录不该被收掉：%v", err)
+	}
+
+	// 再跑一次：没有可搬的了
+	if moved, err := Migrate(); err != nil || moved != 0 {
+		t.Errorf("重复迁移该什么都不做，实际搬了 %d 条，err=%v", moved, err)
+	}
+}
+
+// 会话已经一条条删光了（目录空着），删项目还是要把目录收掉 —— 不留空文件夹
+func TestDeleteAllRemovesAlreadyEmptyDir(t *testing.T) {
+	setHome(t)
+	cwd := "/c/proj"
+
+	s, err := CreateWithID(cwd, "aaaa1111bbbb2222")
+	if err != nil {
+		t.Fatalf("建会话失败：%v", err)
+	}
+	// 新会话不建空文件：落下第一条，目录才真的存在
+	if _, err := s.Append(userMessage("问一句")); err != nil {
+		t.Fatalf("落盘失败：%v", err)
+	}
+	dir, err := dirFor(cwd)
+	if err != nil {
+		t.Fatalf("算目录失败：%v", err)
+	}
+	if err := Delete(s.Path()); err != nil {
+		t.Fatalf("删会话失败：%v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("删单条会话不该动目录：%v", err)
+	}
+
+	if n, err := DeleteAll(cwd); err != nil || n != 0 {
+		t.Fatalf("已经没有会话了，该删掉 0 条，实际 %d 条，err=%v", n, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("空目录该被收掉：%v", err)
+	}
 }
 
 // cwd 里带 glob 元字符（macOS 上完全合法的目录名）时也要找得到会话文件。
@@ -517,9 +664,10 @@ func TestDirForCleansTrailingSlash(t *testing.T) {
 	}
 }
 
-// `/x/a-b` 和 `/x/a/b` 编码出来是同一个会话目录。侧栏和查找都得按 header 里的
-// cwd 认人 —— 不然 A 项目会列出、甚至打开 B 项目的会话，工具还会在 B 目录里跑
-func TestSessionsDoNotLeakAcrossCollidingCwds(t *testing.T) {
+// `/x/a-b` 和 `/x/a/b` 的**可读**那半段编出来都是 x-a-b：以前它们住同一个目录，
+// 只能靠 header 认人。现在名字尾巴上有 cwd 指纹，两边各住各的 —— 这层隔离是
+// 「删项目就把目录收掉」敢做的前提
+func TestCollidingCwdsGetTheirOwnDirs(t *testing.T) {
 	setHome(t)
 	root := t.TempDir()
 	dashed := filepath.Join(root, "a-b")
@@ -530,11 +678,10 @@ func TestSessionsDoNotLeakAcrossCollidingCwds(t *testing.T) {
 		}
 	}
 
-	// 前提本身要断言：这两个 cwd 就是会撞成同一个目录名，不然后面测了个寂寞
 	dirA, _ := dirFor(dashed)
 	dirB, _ := dirFor(nested)
-	if dirA != dirB {
-		t.Fatalf("这两个 cwd 本该编码成同一个目录：\n%s\n%s", dirA, dirB)
+	if dirA == dirB {
+		t.Fatalf("这两个 cwd 各该有自己的目录，实际撞在一起：\n%s", dirA)
 	}
 
 	inDashed, err := CreateWithID(dashed, "aaaabbbbccccdddd")
@@ -565,6 +712,9 @@ func TestSessionsDoNotLeakAcrossCollidingCwds(t *testing.T) {
 	}
 	if path, err := Find(dashed, inDashed.ID()); err != nil || path != inDashed.Path() {
 		t.Errorf("dashed 自己还是该找得到：path=%q err=%v", path, err)
+	}
+	if filepath.Dir(inDashed.Path()) == filepath.Dir(inNested.Path()) {
+		t.Errorf("两条会话该各住各的目录：\n%s", filepath.Dir(inDashed.Path()))
 	}
 }
 

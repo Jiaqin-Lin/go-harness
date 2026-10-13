@@ -2,11 +2,12 @@
 // 只有流式那一轮走增量（见 dom.live / state.streaming）
 
 import { getJSON, request, streamChat } from './api.js';
-import { renderMessage, renderCompaction, updateMessage, setSkillPaths, setImageCtx } from './chat.js';
+import { renderMessage, renderCompaction, updateMessage, setSkillPaths, setImageCtx, attachToolResult } from './chat.js';
 import { Graph } from './graph.js';
 import { DirPicker } from './dirpicker.js';
 import { SkillMenu, SkillsModal } from './skills.js';
 import { SettingsModal } from './settings.js';
+import { ConfirmModal } from './confirm.js';
 import { summarise, clip, numTokens } from './shared.js';
 
 const el = (id) => document.getElementById(id);
@@ -43,7 +44,7 @@ const dom = {
   skillChip: el('skill-chip'),
   skillMenu: el('skill-menu'),
   skillsModal: el('skills'),
-  remove: el('session-delete'),
+  confirm: el('confirm'),
   splitterSidebar: el('splitter-sidebar'),
   splitterChat: el('splitter-chat'),
   toggleSidebar: el('toggle-sidebar'),
@@ -144,6 +145,8 @@ const skillsModal = new SkillsModal({
   },
 });
 
+const confirmModal = new ConfirmModal({ root: dom.confirm });
+
 const settingsModal = new SettingsModal({
   root: el('settings'),
   onSaved: (meta) => {
@@ -204,13 +207,30 @@ function projectElement(project) {
   remove.type = 'button';
   remove.className = 'btn btn-ghost btn-icon';
   remove.textContent = '×';
-  remove.title = '从列表里移除（不删会话）';
-  remove.setAttribute('aria-label', '移除项目');
+  remove.title = '删掉这个项目（名下会话一起删）';
+  remove.setAttribute('aria-label', '删除项目');
   remove.addEventListener('click', async (event) => {
     event.stopPropagation();
-    await request('DELETE', `/api/projects?path=${encodeURIComponent(project.path)}`);
+    const count = (project.sessions || []).length;
+    const ok = await confirmModal.ask({
+      title: `删掉项目「${project.name}」？`,
+      body: count
+        ? `它名下的 ${count} 个会话会一起删掉，磁盘上的文件不再保留，不能撤销。`
+        : '名下还没有会话。这个目录会从侧栏移出去，会话目录一并收掉。',
+    });
+    if (!ok) return;
+
+    try {
+      await request('DELETE', `/api/projects?path=${encodeURIComponent(project.path)}`);
+    } catch (err) {
+      dom.hint.textContent = err.message;
+      return;
+    }
     state.open.delete(project.path);
+    // 删的正是眼下开着的这个项目：右栏这条会话的文件也没了
+    if (state.cwd === project.path) clearSession();
     await refreshProjects();
+    renderAll();
   });
   // 新建会话的入口在这个方块里（跟 × 一样悬停才显形）；目录不在就没得建
   let add = null;
@@ -252,17 +272,77 @@ function sessionList(project) {
   return list;
 }
 
+// sessionRow 是侧栏里的一条会话：点开它，悬停出来的 × 删它。
+// 行本身用 div 而不是 button —— × 是嵌在里面的另一个按钮，按钮套按钮不合法
 function sessionRow(project, session) {
-  const row = document.createElement('button');
-  row.type = 'button';
+  const row = document.createElement('div');
   row.className = 'session-row';
+  row.tabIndex = 0;
   if (state.cwd === project.path && state.sessionId === session.id) row.classList.add('is-active');
-  row.append(
+
+  const text = document.createElement('span');
+  text.className = 'session-text';
+  text.append(
     span('session-title', session.title || session.preview || '新会话'),
     span('session-meta', when(session.modified)),
   );
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'btn btn-ghost btn-icon session-remove';
+  remove.textContent = '×';
+  remove.title = '删掉这个会话（磁盘上的文件一起删）';
+  remove.setAttribute('aria-label', '删除会话');
+  remove.addEventListener('click', (event) => {
+    event.stopPropagation();
+    deleteSession(project, session);
+  });
+
+  row.append(text, remove);
   row.addEventListener('click', () => openSession(project.path, session.id));
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openSession(project.path, session.id);
+    }
+  });
   return row;
+}
+
+// deleteSession 删一条会话：先弹确认，再让服务端删文件。删的正好是开着的这条时
+// 把右栏清掉 —— 留着一个文件已经没了的会话，接着说话会当场把它重建出来
+async function deleteSession(project, session) {
+  const title = clip(session.title || session.preview || '新会话', 24);
+  const ok = await confirmModal.ask({
+    title: `删掉会话「${title}」？`,
+    body: '磁盘上的会话文件会一起删，不能撤销。',
+  });
+  if (!ok) return;
+
+  try {
+    await request('DELETE', `/api/session?cwd=${encodeURIComponent(project.path)}&id=${encodeURIComponent(session.id)}`);
+  } catch (err) {
+    dom.hint.textContent = err.message;
+    return;
+  }
+  if (state.cwd === project.path && state.sessionId === session.id) clearSession();
+  await refreshProjects();
+  renderAll();
+}
+
+// clearSession 把右栏清空：当前这条会话已经不在磁盘上了。
+// 只管改状态，重画交给调用方 —— 它们还要先把侧栏拉新的
+function clearSession() {
+  state.sessionId = null;
+  state.draft = false;
+  state.entries = [];
+  state.leafId = '';
+  state.selected = null;
+  state.pendingBranch = null;
+  state.title = '';
+  state.preview = '';
+  clearLive();
+  location.hash = '';
 }
 
 function activeRow(title, meta) {
@@ -387,11 +467,31 @@ function applySelection(id) {
   state.selected = id;
   renderGraph();
   renderChat();
-  // 点开一轮 = 要看这轮的问答，翻到尾巴（回答在最后）
-  dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
   renderComposer();
   graph.reveal(state.pendingBranch !== null ? PENDING_ID : id);
   updateHash();
+  // 点开一轮 = 要看这一轮的提问，把它对到右栏顶上；贴底的话问题早滚没了
+  scrollToTurn(id);
+}
+
+// scrollToTurn 把右栏滚到这一轮的用户消息上
+function scrollToTurn(entryId) {
+  const startId = turnStartId(entryId);
+  const target = startId && dom.chatLog.querySelector(`[data-entry-id="${CSS.escape(startId)}"]`);
+  if (!target) return;
+  const gap = target.getBoundingClientRect().top - dom.chatLog.getBoundingClientRect().top;
+  dom.chatLog.scrollTop += gap - 10;
+}
+
+// turnStartId 沿父链上溯：这一轮是从哪句用户消息起的
+function turnStartId(entryId) {
+  for (let id = entryId, guard = 0; id && guard < 10000; guard++) {
+    const entry = entryById(id);
+    if (!entry) return null;
+    if (entry.message?.role === 'user') return entry.id;
+    id = entry.parentId || null;
+  }
+  return null;
 }
 
 function entryById(id) {
@@ -537,15 +637,10 @@ function graphModel() {
   return { nodes, owner };
 }
 
-// turnLabel 给一轮起个短名：从条目沿父链往上找，这一轮是从哪句用户消息起的
+// turnLabel 给一轮起个短名：这一轮开头那句用户消息的摘要
 function turnLabel(entryId) {
-  for (let id = entryId, guard = 0; id && guard < 10000; guard++) {
-    const entry = entryById(id);
-    if (!entry) break;
-    if (entry.message?.role === 'user') return clip(summarise(entry.message), 16);
-    id = entry.parentId || null;
-  }
-  return '这一轮';
+  const start = entryById(turnStartId(entryId));
+  return start ? clip(summarise(start.message), 16) : '这一轮';
 }
 
 function renderChat() {
@@ -556,10 +651,40 @@ function renderChat() {
   // 折叠段是路径的前缀（firstKeptEntryId 自己永远进上下文），所以第一条还进
   // 上下文的 entry 的下标就是被折掉的条数，也就是分隔线的落点
   const cut = path.findIndex((entry) => !folded.has(entry.id));
-  const nodes = path.map((entry) => (entry.compaction
-    ? renderCompaction(entry, { folded: folded.has(entry.id) })
-    : renderMessage(entry.message || {}, { folded: folded.has(entry.id), skill: entry.skill, entryId: entry.id })));
-  if (cut > 0) nodes.splice(cut, 0, foldLine(cut));
+  // 路径上最后一条用户消息 = 选中这一轮的提问，给它挂个「就在这儿」的标记
+  const currentTurn = path.filter((entry) => entry.message?.role === 'user').pop();
+
+  const nodes = [];
+  const cards = new Map(); // toolCallId -> 那张调用卡，工具结果靠它贴回原地
+
+  path.forEach((entry, index) => {
+    const isFolded = folded.has(entry.id);
+    const msg = entry.message || {};
+
+    // 工具结果贴回它那张调用卡：一次调用的经过是一件事，摆成两条会看岔
+    // （工具1 工具2 结果1 结果2）。对不上卡片的（路径从半截开始）照旧自成一条
+    if (msg.role === 'tool_result' && cards.has(msg.toolCallId)) {
+      const card = cards.get(msg.toolCallId);
+      // 折线正好切在这次结果上：插在卡片前，别让卡片骑在线上
+      if (cut > 0 && index === cut) card.before(foldLine(cut));
+      attachToolResult(card, msg, { entryId: entry.id });
+      if (isFolded) card.classList.add('is-folded');
+      return;
+    }
+
+    if (cut > 0 && index === cut) nodes.push(foldLine(cut));
+
+    const el = entry.compaction
+      ? renderCompaction(entry, { folded: isFolded })
+      : renderMessage(msg, { folded: isFolded, skill: entry.skill, entryId: entry.id });
+    el.dataset.entryId = entry.id;
+    if (entry.id === currentTurn?.id) el.classList.add('is-current-turn');
+    for (const card of el.querySelectorAll('.tool-call[data-tool-call-id]')) {
+      cards.set(card.dataset.toolCallId, card);
+    }
+    nodes.push(el);
+  });
+
   withPin(() => {
     dom.history.replaceChildren(...nodes);
     if (!path.length && !state.sessionId) {
@@ -604,7 +729,6 @@ function renderComposer() {
 
   dom.input.disabled = !canType;
   dom.stop.hidden = !state.busy;
-  dom.remove.hidden = state.draft || !state.sessionId;
   dom.hint.textContent = state.notice || (state.busy ? busyHint() : branchHint());
 
   // 跑着的时候发送区换成两个明确的动作：插话 / 排队，按哪个发生哪个，没有额外的开关
@@ -615,7 +739,8 @@ function renderComposer() {
   dom.steer.disabled = !canSend;
   dom.follow.disabled = !canSend;
 
-  // 技能按钮只看 cwd：还没选会话时也得能进管理界面（管理弹窗按 cwd 走，跟会话无关）。
+  // 技能按钮只看 cwd 和 busy：管理弹窗得随时进得来（它按 cwd 走，跟会话无关），
+  // 所以按钮不按「选的是不是最后一个节点」灰 —— 那一层由菜单自己判（见下面 click）。
   // 跑着的时候不给选：技能是按整轮注进 system prompt 的，插话吃到的是上一轮的
   dom.skillPick.disabled = !state.cwd || state.busy;
   dom.skillChip.hidden = !state.skillChip;
@@ -1085,22 +1210,25 @@ function finishAssistant(message) {
   if (stay) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
 }
 
+// 跑着的时候结果也贴进调用卡：跟落盘之后重画出来的长相一致，中间不跳一下
 function startToolRun(event) {
-  const msg = { role: 'tool_result', toolName: event.toolName, toolCallId: event.toolCallId, blocks: [] };
-  const element = renderMessage(msg, { streaming: true });
-  withPin(() => dom.live.append(element));
-  state.live.push({ el: element, msg, toolCallId: event.toolCallId, done: false });
+  toolCard(event.toolCallId)?.classList.add('is-running');
 }
 
 function finishToolRun(event) {
-  const live = [...state.live].reverse().find((item) => item.toolCallId === event.toolCallId && !item.done);
-  if (!live) return;
-  live.done = true;
-  live.msg.blocks = event.blocks || [];
-  live.msg.isError = Boolean(event.isError);
+  const card = toolCard(event.toolCallId);
+  if (!card) return;
+  card.classList.remove('is-running');
   const stay = pinned();
-  updateMessage(live.el, live.msg, {});
+  attachToolResult(card, { blocks: event.blocks || [], isError: Boolean(event.isError) });
   if (stay) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
+}
+
+// toolCard 按 toolCallId 找那张调用卡。live 和 history 一起找：落盘的 entry
+// 会把元素从 live 挪进 history，不挑容器才找得到
+function toolCard(toolCallId) {
+  if (!toolCallId) return null;
+  return dom.chatLog.querySelector(`.tool-call[data-tool-call-id="${CSS.escape(toolCallId)}"]`);
 }
 
 // adoptEntry 把「刚画出来的消息」换成「已经落盘的 entry」：
@@ -1116,8 +1244,22 @@ function adoptEntry(entry) {
   // 新分支的第一条落盘了，幽灵节点退役，真节点接管这个位置
   if (state.pendingBranch !== null && entry.parentId === state.pendingBranch) state.pendingBranch = null;
 
+  // 没走开的话眼跟着往下；用户中途点了别的节点就别把他拽回来。
+  // 工具结果也算往下走的一步 —— 少走这一步，选中会停在助手那条上，
+  // 这一轮剩下的结果和回答就都画不出来了
+  if (state.selected === (entry.parentId || null) || state.selected === null) state.selected = entry.id;
+
   const stay = pinned();
-  if (live) {
+  // 工具结果没有自己的消息元素，它落在调用那张卡里。卡片上可能已经贴过流式
+  // 期间来的同一份结果（tool_end 先到），那就不再贴第二遍
+  if (entry.message?.role === 'tool_result') {
+    const card = toolCard(entry.message.toolCallId);
+    if (card && !card.classList.contains('has-result')) {
+      attachToolResult(card, entry.message, { entryId: entry.id });
+    } else if (!card) {
+      dom.history.append(renderMessage(entry.message, { entryId: entry.id }));
+    }
+  } else if (live) {
     live.el.dataset.entryId = entry.id;
     updateMessage(live.el, entry.message || {}, { skill: entry.skill, entryId: entry.id });
     dom.history.append(live.el);
@@ -1128,9 +1270,6 @@ function adoptEntry(entry) {
     dom.history.append(renderMessage(entry.message || {}, { skill: entry.skill, entryId: entry.id }));
   }
   if (stay) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
-
-  // 没走开的话眼跟着往下；用户中途点了别的节点就别把他拽回来
-  if (state.selected === (entry.parentId || null) || state.selected === null) state.selected = entry.id;
 
   renderGraph();
   renderComposer();
@@ -1227,9 +1366,11 @@ dom.stop.addEventListener('click', async () => {
   }
 });
 // 技能菜单挂在这一行：选中的技能只对下一条消息生效，所以没选会话（还没定 cwd）时
-// 按钮是灰的，但管理弹窗在选定了项目、还没有会话的时候就该能进
+// 按钮是灰的，但管理弹窗在选定了项目、还没有会话的时候就该能进。
+// 能不能选中跟图片按钮同一条判据（sendParent 为 null = 选中的是历史节点）：
+// 看历史的时候下一条消息还没影，选了也用不上
 dom.skillPick.addEventListener('click', () => {
-  if (state.cwd) skillsMenu.toggle(state.cwd);
+  if (state.cwd) skillsMenu.toggle(state.cwd, { canPick: sendParent() !== null });
 });
 dom.skillChip.addEventListener('click', (event) => {
   if (!event.target.closest('.skill-chip-x')) return; // 点 chip 正文不开菜单，只有 × 有用
@@ -1238,26 +1379,6 @@ dom.skillChip.addEventListener('click', (event) => {
 });
 
 el('graph-fit').addEventListener('click', () => graph.fit());
-
-el('session-delete').addEventListener('click', async () => {
-  if (state.draft || !state.sessionId) return;
-  if (!confirm('删掉这个会话？磁盘上的文件也会删。')) return;
-  try {
-    await request('DELETE', `/api/session?cwd=${encodeURIComponent(state.cwd)}&id=${encodeURIComponent(state.sessionId)}`);
-  } catch (err) {
-    dom.hint.textContent = err.message;
-    return;
-  }
-  state.sessionId = null;
-  state.entries = [];
-  state.leafId = '';
-  state.selected = null;
-  state.title = '';
-  clearLive();
-  await refreshProjects();
-  renderAll();
-  location.hash = '';
-});
 
 el('add-project').addEventListener('click', () => picker.open(state.cwd || ''));
 el('add-project-empty').addEventListener('click', () => picker.open(state.cwd || ''));

@@ -45,6 +45,14 @@ func main() {
 	}
 	llm := provider.NewDeepSeek(apiKey, baseURL, model)
 
+	// 跟 web 版同一个入口：老命名下的会话先挪到新名字下，不然会当成没有历史，
+	// 眼睁睁在同一个项目里开出一条空会话
+	if moved, err := session.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "会话目录没迁移完：%v\n", err)
+	} else if moved > 0 {
+		fmt.Printf("把 %d 条老会话挪到了新的目录名下\n", moved)
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "拿不到当前目录：%v\n", err)

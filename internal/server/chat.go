@@ -401,3 +401,17 @@ func (s *Server) isRunning(key sessionKey) bool {
 	defer s.mu.Unlock()
 	return s.running[key] != nil
 }
+
+// runningIn 这个 cwd 下有没有会话正在跑。按 cwd 看的是整个项目 ——
+// 删项目要级联删会话，只要有一条在跑就不能动
+func (s *Server) runningIn(cwd string) bool {
+	cwd = filepath.Clean(cwd)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.running {
+		if key.cwd == cwd {
+			return true
+		}
+	}
+	return false
+}

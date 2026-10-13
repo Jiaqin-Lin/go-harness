@@ -3,6 +3,8 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +96,8 @@ func Find(cwd, id string) (string, error) {
 func sameCwd(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
 
 // Delete 删会话文件 + 标题 sidecar（连写标题halfway留下的 tmp 一起）。
-// 文件已经不在不算错
+// 文件已经不在不算错。目录留着不动 —— 一条条删会话是「清内容」，
+// 这个 cwd 以后多半还会再用；整目录的收拾留给 DeleteAll（删项目那条路）
 func Delete(path string) error {
 	for _, target := range []string{path, titlePath(path), titlePath(path) + ".tmp"} {
 		if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -102,6 +105,28 @@ func Delete(path string) error {
 		}
 	}
 	return nil
+}
+
+// DeleteAll 删掉这个 cwd 名下的所有会话，返回删了几条，最后把目录也收掉 ——
+// 删项目就是「这个目录从此不归我管」，留个空壳只会让人以为里面还有东西。
+// 同级目录里住着别的项目的会话时不碰它们（List 按文件头里的 cwd 认过），
+// 那种情况下目录也收不掉 —— os.Remove 只删得掉空目录
+func DeleteAll(cwd string) (int, error) {
+	infos, err := List(cwd)
+	if err != nil {
+		return 0, err
+	}
+	for i, info := range infos {
+		if err := Delete(info.Path); err != nil {
+			return i, err
+		}
+	}
+	dir, err := dirFor(cwd)
+	if err != nil {
+		return len(infos), err
+	}
+	os.Remove(dir)
+	return len(infos), nil
 }
 
 // titlePath 是会话文件的标题 sidecar。标题不写进 JSONL 是有原因的：List 只读
@@ -327,18 +352,105 @@ func readFile(r io.Reader) (*Header, []*Entry, error) {
 	}
 }
 
-// dirFor 是 cwd 对应的会话目录：~/.go-harness/sessions/--<cwd 编码>--。
-// 编码规则照 pi：去掉开头的 /，再把 / \ : 换成 -
-func dirFor(cwd string) (string, error) {
+// sessionsRoot 是所有会话目录的父目录
+func sessionsRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("找不到用户主目录：%w", err)
+	}
+	return filepath.Join(home, ".go-harness", "sessions"), nil
+}
+
+// dirFor 是 cwd 对应的会话目录：~/.go-harness/sessions/--<cwd 编码>-<指纹>--。
+//
+// 编码规则照 pi（去掉开头的 /，再把 / \ : 换成 -）—— 它是多对一的：/a-b 和 /a/b
+// 编出来都是 a-b，光靠它两个项目会住进同一个目录。所以尾巴上再钉一段 cwd 的指纹，
+// 把「目录名 → cwd」拉回一对一。名字只是标签，文件头里的 cwd 才是权威
+func dirFor(cwd string) (string, error) {
+	root, err := sessionsRoot()
+	if err != nil {
+		return "", err
 	}
 	// 先 Clean：同一个目录带不带尾斜杠必须落到同一个会话目录，
 	// 不然 /a/b 和 /a/b/ 会各建一套会话，侧栏只看得到其中一套
 	cwd = filepath.Clean(cwd)
 	encoded := strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(strings.TrimPrefix(cwd, "/"))
-	return filepath.Join(home, ".go-harness", "sessions", "--"+encoded+"--"), nil
+	return filepath.Join(root, "--"+encoded+"-"+cwdHash(cwd)+"--"), nil
+}
+
+// cwdHash 是 cwd 的一小段指纹（4 字节 = 8 位十六进制）。几十个会话目录的量级，
+// 撞上要 2 的 16 次方个目录才有一次机会，够用了
+func cwdHash(cwd string) string {
+	sum := sha256.Sum256([]byte(cwd))
+	return hex.EncodeToString(sum[:4])
+}
+
+// Migrate 把老命名（--<编码>--，没有指纹）下的会话挪到新名字下。
+//
+// 认的是每个文件**自己** header 里的 cwd，不是它现在住的目录名 —— 所以就算老目录
+// 里混着两个项目的会话，也各自去各自该去的地方，不会搬错。已经在新名字下的不动，
+// 读不出 cwd 的文件也不动（宁可留在原地，也不能瞎搬）。重复跑是安全的
+func Migrate() (int, error) {
+	root, err := sessionsRoot()
+	if err != nil {
+		return 0, err
+	}
+	dirs, err := os.ReadDir(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil // 还没建过 sessions/，没什么可迁的
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	moved := 0
+	for _, dirent := range dirs {
+		if !dirent.IsDir() {
+			continue
+		}
+		oldDir := filepath.Join(root, dirent.Name())
+		files, err := os.ReadDir(oldDir)
+		if err != nil {
+			return moved, err
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".jsonl") {
+				continue // 标题 sidecar 跟着正文走，不单独算一条
+			}
+			src := filepath.Join(oldDir, file.Name())
+			header, ok := readHeader(src)
+			if !ok || header.Cwd == "" {
+				continue
+			}
+			dst, err := dirFor(header.Cwd)
+			if err != nil {
+				return moved, err
+			}
+			if dst == oldDir {
+				continue // 已经在它该在的地方
+			}
+			target := filepath.Join(dst, file.Name())
+			// 目标处已经有同名文件：多半是同一份会话被复制过。跳过不覆盖 ——
+			// 留在原地的顶多看不见，盖掉的是一份真数据
+			if _, err := os.Stat(target); err == nil {
+				continue
+			}
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return moved, err
+			}
+			if err := os.Rename(src, target); err != nil {
+				return moved, err
+			}
+			for _, side := range []string{".title", ".title.tmp"} {
+				if _, err := os.Stat(src + side); err == nil {
+					os.Rename(src+side, target+side) // 标题搬不动不影响正文，顶多退回没标题
+				}
+			}
+			moved++
+		}
+		os.Remove(oldDir) // 空了才收得掉；还留着别的东西（比如读不出的文件）就留着
+	}
+	return moved, nil
 }
 
 // fileName 是会话文件名：<时间戳，: 和 . 换成 ->_<session id>.jsonl。

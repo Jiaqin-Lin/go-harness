@@ -78,14 +78,12 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	out := make([]projectDTO, 0, len(projects))
 	for _, project := range projects {
 		dto := projectDTO{Path: project.Path, Name: filepath.Base(project.Path), Sessions: []sessionDTO{}}
-		if !isDir(project.Path) {
-			// 目录没了也照样列出来，前端标「目录不在了」。悄悄从清单里抹掉的话，
-			// 用户会以为会话丢了
-			out = append(out, dto)
-			continue
-		}
-		dto.Exists = true
+		// 目录没了也照样列出来，前端标「目录不在了」。悄悄从清单里抹掉的话，
+		// 用户会以为会话丢了
+		dto.Exists = isDir(project.Path)
 
+		// 会话跟项目目录在不在没关系（它们按 cwd 编码单独存），所以这里照常列 ——
+		// 目录不在了的项目，删它的时候也得数得清会删掉几个会话
 		infos, err := session.List(project.Path)
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "%v", err)
@@ -133,11 +131,24 @@ func (s *Server) handleProjectAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"path": path})
 }
 
-// handleProjectRemove 只把目录移出清单，sessions/ 下的会话一条不删
+// handleProjectRemove 把目录移出清单，它名下的会话一并删掉。删是不可逆的，
+// 前端在点 × 之后会先弹一次确认，这里不再问第二遍
 func (s *Server) handleProjectRemove(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Clean(r.URL.Query().Get("path"))
 	if !filepath.IsAbs(path) {
 		fail(w, http.StatusBadRequest, "要给绝对路径")
+		return
+	}
+
+	// 正在跑的会话不能删：那一轮还在往文件里追加。查的是锁不是磁盘 ——
+	// 新会话的第一条消息落盘之前就占着锁了，那时候文件还不存在
+	if s.runningIn(path) {
+		fail(w, http.StatusConflict, "有会话正在跑一轮，等它结束再删这个项目")
+		return
+	}
+
+	if _, err := session.DeleteAll(path); err != nil {
+		fail(w, http.StatusInternalServerError, "会话没删干净：%v", err)
 		return
 	}
 	if err := session.RemoveProject(path); err != nil {

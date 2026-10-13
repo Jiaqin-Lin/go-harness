@@ -185,6 +185,8 @@ function skillRead(block) {
 function toolCallBlock(block, { running }) {
   const wrap = document.createElement('div');
   wrap.className = 'tool-call' + (running ? ' is-running' : '');
+  // 结果靠这个 id 找回来贴进同一张卡（见 attachToolResult / app.js 的 renderChat）
+  if (block.toolCallId) wrap.dataset.toolCallId = block.toolCallId;
   const line = document.createElement('div');
   line.className = 'tool-line';
   const name = document.createElement('span');
@@ -209,20 +211,36 @@ function toolCallBlock(block, { running }) {
   return wrap;
 }
 
-// 工具结果：文本原样给（长了自己滚），图片画出来 —— 模型看到的图，用户也该看到
-export function toolResultBlock(blocks, isError, entryId = '') {
-  const wrap = document.createElement('div');
-  wrap.className = 'tool-result' + (isError ? ' is-error' : '');
+// attachToolResult 把一次调用的结果贴进它那张卡：调用和结果是同一件事，
+// 拆成两处会看岔（工具1 工具2 结果1 结果2）。找不到卡片的退路见 toolResultBlock
+export function attachToolResult(card, msg, { entryId = '' } = {}) {
+  card.classList.add('has-result');
+  if (msg.isError) card.classList.add('is-error');
+  card.append(...toolResultContent(msg.blocks || [], entryId));
+}
+
+// 工具结果的内容：文本原样给（长了自己滚），图片画出来 —— 模型看到的图，用户也该看到
+function toolResultContent(blocks, entryId) {
+  const nodes = [];
   const text = blocks.filter((b) => b.kind === 'text').map((b) => b.text).join('\n');
   if (text) {
     const out = document.createElement('pre');
     out.className = 'tool-out';
     out.textContent = text.trim();
-    wrap.append(out);
+    nodes.push(out);
   }
   blocks.forEach((block, index) => {
-    if (block.kind === 'image') wrap.append(imageBlock(block, { entryId, index }));
+    if (block.kind === 'image') nodes.push(imageBlock(block, { entryId, index }));
   });
+  return nodes;
+}
+
+// toolResultBlock 是独立的一张结果卡：路径从半截开始时（调用的那条不在路径上）
+// 结果没有卡可并，只能自己站着
+export function toolResultBlock(blocks, isError, entryId = '') {
+  const wrap = document.createElement('div');
+  wrap.className = 'tool-result' + (isError ? ' is-error' : '');
+  wrap.append(...toolResultContent(blocks, entryId));
   return wrap;
 }
 
@@ -275,10 +293,20 @@ function byteSize(bytes) {
 }
 
 // ── markdown ─────────────────────────────────────────────
-// 只认围栏代码、行内代码、加粗、标题、列表、链接 —— agent 的输出基本就这些。
-// 全部用 DOM 拼、不碰 innerHTML，模型吐什么进来都不会变成标签
+// 只认围栏代码、行内代码、加粗、斜体、标题、列表、链接、表格、分隔线 ——
+// agent 的输出基本就这些。全部用 DOM 拼、不碰 innerHTML，模型吐什么进来都不会变成标签
 
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)\s]+\))/g;
+const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*\n]*\*)|(\[[^\]]+\]\([^)\s]+\))/g;
+
+// 表格：| 表头 | ... | 下面跟一行 |---|---|。表头两头的竖线可有可无，
+// 单元格里的 | 不支持转义 —— 模型排的表基本不长那样
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_SEP = /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/;
+const RULE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
+
+function tableCells(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
 
 export function markdown(text) {
   const frag = document.createDocumentFragment();
@@ -311,9 +339,24 @@ export function markdown(text) {
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       closeList();
-      const h = document.createElement('h' + Math.min(heading[1].length + 2, 4));
+      // 层级照原样给（h5/h6 并到 h4）：字号由 CSS 拉开，这里再改级就看不出深浅了
+      const h = document.createElement('h' + Math.min(heading[1].length, 4));
       inline(h, heading[2]);
       frag.append(h);
+      continue;
+    }
+
+    if (TABLE_ROW.test(line) && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
+      closeList();
+      const parsed = table(lines, i);
+      frag.append(parsed.el);
+      i = parsed.end;
+      continue;
+    }
+
+    if (RULE.test(line)) {
+      closeList();
+      frag.append(document.createElement('hr'));
       continue;
     }
 
@@ -346,11 +389,40 @@ export function markdown(text) {
   return frag;
 }
 
+// table 从 start 那一行（表头）开始吃一张表，返回元素和最后吃掉的行号 ——
+// 外层循环还会 +1，所以这里回的是最后一行自己
+function table(lines, start) {
+  const head = document.createElement('tr');
+  for (const cell of tableCells(lines[start])) {
+    const th = document.createElement('th');
+    inline(th, cell);
+    head.append(th);
+  }
+
+  const tbody = document.createElement('tbody');
+  let i = start + 2; // 隔掉表头和 |---|---| 分隔行
+  for (; i < lines.length && TABLE_ROW.test(lines[i]); i++) {
+    const row = document.createElement('tr');
+    for (const cell of tableCells(lines[i])) {
+      const td = document.createElement('td');
+      inline(td, cell);
+      row.append(td);
+    }
+    tbody.append(row);
+  }
+
+  const thead = document.createElement('thead');
+  thead.append(head);
+  const el = document.createElement('table');
+  el.append(thead, tbody);
+  return { el, end: i - 1 };
+}
+
 function inline(parent, text) {
   let last = 0;
   for (const match of text.matchAll(INLINE)) {
     if (match.index > last) parent.append(text.slice(last, match.index));
-    const [raw, code, bold, link] = match;
+    const [raw, code, bold, italic, link] = match;
     if (code) {
       const el = document.createElement('code');
       el.textContent = raw.slice(1, -1);
@@ -359,11 +431,17 @@ function inline(parent, text) {
       const el = document.createElement('strong');
       el.textContent = raw.slice(2, -2);
       parent.append(el);
+    } else if (italic) {
+      const el = document.createElement('em');
+      el.textContent = raw.slice(1, -1);
+      parent.append(el);
     } else if (link) {
       const split = raw.indexOf('](');
       const href = raw.slice(split + 2, -1);
       const el = document.createElement('a');
-      el.textContent = raw.slice(1, split);
+      // 链接文字里常嵌着行内代码（[`x`](./x)）：接着按行内规则拆，
+      // 整段当纯文本的话反引号会原样露出来
+      inline(el, raw.slice(1, split));
       // 只放行 http/https：模型编出来的 javascript: 链接不能点
       if (/^https?:\/\//i.test(href)) {
         el.href = href;

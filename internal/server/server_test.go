@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -508,6 +510,81 @@ func TestSessionNotFound(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("该 400，实际 %d", resp.StatusCode)
 	}
+}
+
+// 删项目 = 连它名下的会话一起删（前端点 × 之前会弹一次确认）。
+// 别的项目的会话一条都不能碰
+func TestProjectRemoveCascadesSessions(t *testing.T) {
+	llm := &stubLLM{replies: []string{"答"}}
+	base, cwd := newTestServer(t, llm)
+	other := t.TempDir()
+
+	for _, id := range []string{"aaaa1111bbbb2222", "cccc3333dddd4444"} {
+		runChat(t, base, map[string]any{"cwd": cwd, "sessionId": id, "text": "问一句"})
+	}
+	runChat(t, base, map[string]any{"cwd": other, "sessionId": "eeee5555ffff6666", "text": "别人的"})
+
+	if err := session.AddProject(cwd); err != nil {
+		t.Fatalf("加项目失败：%v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, base+"/api/projects?path="+url.QueryEscape(cwd), nil)
+	if err != nil {
+		t.Fatalf("建请求失败：%v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求发失败：%v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("删项目该 200，实际 %d：%s", resp.StatusCode, readAll(t, resp))
+	}
+
+	if infos, err := session.List(cwd); err != nil || len(infos) != 0 {
+		t.Errorf("项目名下的会话该被一起删掉：%+v err=%v", infos, err)
+	}
+	if projects, err := session.ListProjects(); err != nil || len(projects) != 0 {
+		t.Errorf("项目该从清单里出去：%+v err=%v", projects, err)
+	}
+	if infos, err := session.List(other); err != nil || len(infos) != 1 {
+		t.Errorf("别的项目的会话一条都不该少：%+v err=%v", infos, err)
+	}
+	// 删项目不留空文件夹：那个 --<cwd>-- 目录该整个收掉
+	dir := filepath.Join(os.Getenv("HOME"), ".go-harness", "sessions",
+		"--"+strings.ReplaceAll(strings.TrimPrefix(cwd, "/"), "/", "-")+"--")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("会话目录该被收掉：%v", err)
+	}
+}
+
+// 正在跑的会话不能连项目一起删：那一轮还在往文件里追加
+func TestProjectRemoveBlockedWhileRunning(t *testing.T) {
+	gate := make(chan struct{})
+	llm := &stubLLM{replies: []string{"慢答"}, gate: gate, started: make(chan struct{})}
+	base, cwd := newTestServer(t, llm)
+
+	if err := session.AddProject(cwd); err != nil {
+		t.Fatalf("加项目失败：%v", err)
+	}
+	done := startGatedChat(t, base, cwd, "aaaabbbbccccdddd", "第一问")
+	<-llm.started
+
+	req, _ := http.NewRequest(http.MethodDelete, base+"/api/projects?path="+url.QueryEscape(cwd), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求发失败：%v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("跑着的时候该 409，实际 %d", resp.StatusCode)
+	}
+	if projects, err := session.ListProjects(); err != nil || len(projects) != 1 {
+		t.Errorf("被挡下来时项目该还在清单里：%+v err=%v", projects, err)
+	}
+
+	close(gate)
+	<-done
 }
 
 // 点「停止」= 关掉这个请求，服务端照样把这一轮落盘，文件不留半轮

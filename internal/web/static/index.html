@@ -55,7 +55,6 @@
           <span class="chat-title" id="chat-title">新会话</span>
           <span class="chat-branch" id="chat-branch"></span>
         </div>
-        <button class="btn btn-ghost btn-small" id="session-delete" title="删除这个会话">删除</button>
       </header>
 
       <div class="chat-log" id="chat-log">
@@ -134,6 +133,25 @@
     <footer class="modal-foot">
       <span class="composer-hint" id="settings-note"></span>
       <button class="btn btn-primary btn-small" id="settings-save">保存</button>
+    </footer>
+  </div>
+</div>
+
+<div class="modal" id="confirm" hidden>
+  <div class="modal-panel modal-panel--confirm" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <header class="modal-head">
+      <span id="confirm-title"></span>
+      <button class="btn btn-ghost btn-icon" id="confirm-close" aria-label="关闭">×</button>
+    </header>
+    <div class="modal-body">
+      <p class="confirm-text" id="confirm-text"></p>
+    </div>
+    <footer class="modal-foot">
+      <span></span>
+      <span class="confirm-actions">
+        <button class="btn btn-ghost btn-small" id="confirm-cancel">取消</button>
+        <button class="btn btn-small btn-danger" id="confirm-ok">删除</button>
+      </span>
     </footer>
   </div>
 </div>

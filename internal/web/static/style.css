@@ -28,6 +28,11 @@
   --danger:      #e0968b;
   --danger-soft: rgba(224, 150, 139, .12);
 
+  /* 用户气泡：实心橙一朵，claude.ai 那个调子。深浅两套主题同一份 ——
+     橙底配深字，在亮底和暗底上都立得住 */
+  --bubble-user-bg:  #d97757;
+  --bubble-user-ink: #201a17;
+
   --scrim: rgb(0 0 0 / .55);
 
   --r-lg: 16px;
@@ -180,6 +185,10 @@ body {
 .btn-ghost { border-color: var(--line); }
 .btn-ghost:hover { border-color: var(--line-2); }
 
+/* 删除键：这个是真删东西的按钮，别跟旁边那些普通按钮长一样 */
+.btn-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); }
+.btn-danger:hover { color: var(--danger); border-color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, transparent); }
+
 .empty-title { margin: 0 0 6px; font-size: 13px; color: var(--text); font-weight: 500; }
 .empty-body { margin: 0 0 14px; font-size: 12px; color: var(--text-3); max-width: 34ch; line-height: 1.6; }
 
@@ -229,8 +238,11 @@ body {
 
 .session-list { padding: 2px 0 6px 0; }
 
+/* 行是 div（x 是嵌在里面的按钮，按钮套按钮不合法），宽度、对齐都自己给 */
 .session-row {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   width: 100%;
   text-align: left;
   border: 1px solid transparent;
@@ -238,10 +250,14 @@ body {
   color: var(--text-2);
   font: inherit;
   border-radius: var(--r-md);
-  padding: 6px 8px 6px 26px;
+  padding: 6px 4px 6px 26px;
   cursor: pointer;
 }
 .session-row:hover { background: var(--raised); color: var(--text); }
+.session-text { flex: 1; min-width: 0; }
+/* 删除入口跟项目头的 × 一样：悬停才显形，平时不抢视线 */
+.session-remove { opacity: 0; flex: none; width: 20px; height: 20px; font-size: 13px; }
+.session-row:hover .session-remove, .session-row:focus-within .session-remove { opacity: 1; }
 /* 当前这条用强调色的淡底：hover 的暖灰和它一眼能分开 */
 .session-row.is-active { background: var(--accent-soft); color: var(--text); }
 
@@ -426,6 +442,8 @@ body {
 /* 画布空态是全站唯一的大字排场：衬线标题 + 一行说明，像 claude.ai 的问候语 */
 .graph-empty .empty-title { font: 400 21px/1.35 var(--serif); margin-bottom: 10px; }
 /* ── 右栏对话 ─────────────────────────────────────────── */
+/* 版式：你说的在右边（实心橙气泡），模型说的在左边（铺在面板上），工具卡
+   沉下去、字小一号 —— 三种东西三种长相，扫一眼就知道在读什么 */
 
 .chat {
   display: flex;
@@ -446,10 +464,8 @@ body {
   min-height: 42px;
 }
 .chat-head-text { min-width: 0; display: flex; flex-direction: column; }
-.chat-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-branch { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#session-delete { opacity: 0; }
-.chat-head:hover #session-delete, #session-delete:focus-visible { opacity: 1; }
 
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 16px; }
 /* history 是「根 → 选中节点」那条路径，live 是正在跑的这一轮。
@@ -459,7 +475,14 @@ body {
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 
-.msg-head { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--text-3); }
+/* 你说的那句靠右站：角色行和气泡一起右对齐。气泡挂在 .msg-body 里，
+   而 body 是按内容撑开的 —— 少了下面这条，气泡会贴着 body 的左边，
+   看着像没对齐 */
+.msg--user { align-items: flex-end; }
+.msg--user .msg-body { align-items: flex-end; }
+
+.msg-head { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--text-3); }
+.msg--user .msg-head { justify-content: flex-end; }
 .msg-role { color: var(--text-2); }
 .msg-usage { font-family: var(--mono); font-size: 10px; }
 .msg-note { color: var(--text-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; }
@@ -467,12 +490,26 @@ body {
 
 /* 助手的话直接铺在面板上（无气泡），用户那句才给底色 —— 对话区像 claude.ai */
 .bubble {
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 14.5px;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
-.msg--user .bubble { background: var(--raised); border-radius: var(--r-lg); padding: 10px 14px; }
+.msg--user .bubble {
+  max-width: 88%;
+  /* 靠右的角收小，指向说话的人 */
+  border-radius: 16px 16px 4px 16px;
+  padding: 9px 14px;
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-ink);
+}
 .msg--user .bubble p:first-child { margin-top: 0; }
+/* 橙底上的行内代码和链接跟着气泡走：--sunk 的灰底贴在橙上很脏 */
+.msg--user .bubble :not(pre) > code { background: rgb(0 0 0 / .16); border-color: transparent; color: inherit; }
+.msg--user .bubble pre { background: rgb(0 0 0 / .18); border-color: transparent; color: inherit; }
+.msg--user .bubble a { color: inherit; text-decoration: underline; }
+
+/* 选中的那一轮：提问上缘描一圈，说明「你刚才点的是这儿」 */
+.msg--user.is-current-turn .bubble { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
 .msg--error .bubble { border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line)); border-radius: var(--r-md); padding: 10px 12px; background: var(--danger-soft); color: var(--danger); }
 
 /* 压缩点：左边一条实线，跟正文和其他折叠块区分开 */
@@ -496,8 +533,29 @@ body {
 .bubble ul, .bubble ol { margin: 0 0 8px; padding-left: 18px; }
 .bubble li { margin: 2px 0; }
 .bubble a { color: var(--accent); }
-.bubble h1, .bubble h2, .bubble h3 { font-size: 15px; margin: 0 0 6px; }
-.bubble h1:not(:first-child), .bubble h2:not(:first-child), .bubble h3:not(:first-child) { margin-top: 12px; }
+/* 标题分档：回答的层次全靠它，几档全挤在 15px 就分不出来了 */
+.bubble h1, .bubble h2, .bubble h3, .bubble h4 { margin: 0 0 6px; font-weight: 600; line-height: 1.4; }
+.bubble h1 { font-size: 1.3em; }
+.bubble h2 { font-size: 1.14em; }
+.bubble h3 { font-size: 1.04em; }
+.bubble h4 { font-size: 1em; color: var(--text-2); }
+.bubble h1:not(:first-child), .bubble h2:not(:first-child),
+.bubble h3:not(:first-child), .bubble h4:not(:first-child) { margin-top: 14px; }
+
+/* 表格：右栏窄，宽表自己横滚，别把气泡撑破 */
+.bubble table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: .93em;
+}
+.bubble th, .bubble td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
+.bubble th { background: var(--sunk); font-weight: 600; }
+.bubble table:last-child { margin-bottom: 0; }
+
+.bubble hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
 
 .thinking { border: 1px dashed var(--line-2); border-radius: var(--r-md); padding: 8px 10px; color: var(--text-3); font-size: 12px; }
 .thinking summary { cursor: pointer; color: var(--text-3); font-size: 11px; list-style: none; }
@@ -505,6 +563,9 @@ body {
 .thinking summary::before { content: "▸ "; }
 .thinking[open] summary::before { content: "▾ "; }
 .thinking p { margin: 6px 0 0; white-space: pre-wrap; }
+
+/* 一条消息里的各段（正文、思考、工具卡）之间留口气 */
+.msg-body { display: flex; flex-direction: column; gap: 8px; }
 
 .tool-call, .tool-result {
   border: 1px solid var(--line);
@@ -544,6 +605,13 @@ body {
 @keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .tool-result.is-error { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 .tool-result.is-error .tool-out { color: var(--danger); }
+
+/* 结果贴进调用卡之后（attachToolResult）：一张卡 = 一次调用的头和尾。
+   出错、被折的配色跟独立的结果卡一套 */
+.tool-call.is-error { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+.tool-call.is-error .tool-out { color: var(--danger); }
+.tool-call.is-folded { opacity: .55; }
+.tool-call > .msg-image, .tool-result > .msg-image { display: block; padding: 8px 10px 0; }
 .tool-image {
   display: inline-block;
   font-size: 11px;
@@ -705,6 +773,9 @@ body {
   cursor: pointer;
 }
 .skill-menu-item:hover { background: var(--raised); color: var(--text); }
+/* 看历史节点的时候技能列出来但点不了（见 skills.js 的 canPick） */
+.skill-menu-item[disabled] { opacity: .45; cursor: default; }
+.skill-menu-item[disabled]:hover { background: transparent; }
 .skill-menu-manage { color: var(--text-3); font-size: 12px; }
 
 .skill-text { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
@@ -838,6 +909,14 @@ body {
 }
 .dir-row:hover { background: var(--raised); color: var(--text); }
 .dir-empty { padding: 18px 12px; color: var(--text-3); font-size: 12px; }
+
+/* ── 确认弹窗 ─────────────────────────────────────────── */
+/* 比目录选择器小一号：它只说一句话，不用一大块地方 */
+.modal-panel--confirm { width: min(420px, 100%); max-height: none; }
+/* 通用弹窗的 body 有最小高度（选择器要有地方摆列表），确认框只有一句话 */
+.modal-panel--confirm .modal-body { min-height: 0; }
+.confirm-text { margin: 0; padding: 6px 4px; font-size: 13px; line-height: 1.65; color: var(--text-2); }
+.confirm-actions { display: flex; gap: 6px; }
 
 /* ── 窄屏 ─────────────────────────────────────────────── */
 

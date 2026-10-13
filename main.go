@@ -11,6 +11,7 @@ import (
 
 	"github.com/reuben/go-harness/internal/provider"
 	"github.com/reuben/go-harness/internal/server"
+	"github.com/reuben/go-harness/internal/session"
 )
 
 func main() {
@@ -27,6 +28,14 @@ func main() {
 	if apiKey == "" || baseURL == "" || model == "" {
 		fmt.Fprintln(os.Stderr, "DEEPSEEK_API_KEY、DEEPSEEK_BASE_URL、DEEPSEEK_MODEL 要在 .env 或环境变量里给全")
 		os.Exit(1)
+	}
+
+	// 老命名下的会话挪到新名字下（目录名加了 cwd 指纹，见 session.dirFor）。
+	// 一次性的事，挪不动也不能拦住服务启动 —— 老目录还在，下次再试
+	if moved, err := session.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "会话目录没迁移完：%v\n", err)
+	} else if moved > 0 {
+		fmt.Printf("把 %d 条老会话挪到了新的目录名下\n", moved)
 	}
 
 	// 启动目录是「可能被当成项目」的默认值：目录选择器从这儿起
