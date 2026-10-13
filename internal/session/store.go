@@ -267,19 +267,6 @@ func List(cwd string) ([]Info, error) {
 	return infos, nil
 }
 
-// ContinueRecent 打开这个 cwd 下最近改动的会话；一个都没有就新建。
-// 靠文件的 mtime 找，不看文件名里的时间戳
-func ContinueRecent(cwd string) (*Session, error) {
-	infos, err := List(cwd)
-	if err != nil {
-		return nil, err
-	}
-	if len(infos) == 0 {
-		return Create(cwd)
-	}
-	return Open(infos[0].Path)
-}
-
 // readHeader 只读第一行。得用 ReadBytes 而不是 Scanner —— Scanner 默认单行上限
 // 64KB，而消息里可能带 base64 图片，第一行轻松超
 func readHeader(path string) (Header, bool) {

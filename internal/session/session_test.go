@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/reuben/go-harness/internal/types"
 )
@@ -164,7 +163,7 @@ func TestNoFileUntilFirstAppend(t *testing.T) {
 }
 
 // 落盘单位是一轮：core.Run 返回后一次性 Append，读回来必须一模一样
-func TestContinueRecentRestoresHistory(t *testing.T) {
+func TestReopenRestoresHistory(t *testing.T) {
 	setHome(t)
 	cwd := t.TempDir()
 
@@ -182,51 +181,15 @@ func TestContinueRecentRestoresHistory(t *testing.T) {
 		}
 	}
 
-	again, err := ContinueRecent(cwd)
+	again, err := Open(s.Path())
 	if err != nil {
-		t.Fatalf("续跑失败：%v", err)
+		t.Fatalf("重开失败：%v", err)
 	}
 	if again.ID() != s.ID() || again.Path() != s.Path() || again.Cwd() != cwd {
 		t.Errorf("读回来的会话不是同一个：id=%q path=%q cwd=%q", again.ID(), again.Path(), again.Cwd())
 	}
 	if got, want := again.Messages(), s.Messages(); !reflect.DeepEqual(got, want) {
 		t.Errorf("历史没读回来：\n原 %+v\n后 %+v", want, got)
-	}
-}
-
-// ContinueRecent 靠 mtime 定谁最近，文件名里的时间戳不参与
-func TestContinueRecentPicksLatestByMtime(t *testing.T) {
-	setHome(t)
-	cwd := t.TempDir()
-
-	older, err := Create(cwd)
-	if err != nil {
-		t.Fatalf("建会话失败：%v", err)
-	}
-	if _, err := older.Append(userMessage("早的")); err != nil {
-		t.Fatalf("落盘失败：%v", err)
-	}
-
-	newer, err := Create(cwd)
-	if err != nil {
-		t.Fatalf("建会话失败：%v", err)
-	}
-	if _, err := newer.Append(userMessage("晚的")); err != nil {
-		t.Fatalf("落盘失败：%v", err)
-	}
-
-	// 两个文件是同一毫秒建的，只有把早的那个 mtime 推回去才分得出先后
-	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(older.Path(), past, past); err != nil {
-		t.Fatalf("改 mtime 失败：%v", err)
-	}
-
-	got, err := ContinueRecent(cwd)
-	if err != nil {
-		t.Fatalf("续跑失败：%v", err)
-	}
-	if got.ID() != newer.ID() {
-		t.Errorf("该续最新的那个，实际续了 %q", got.ID())
 	}
 }
 
@@ -302,19 +265,6 @@ func TestListOnlyReturnsSessionsOfThatCwd(t *testing.T) {
 	}
 	if infos[0].Created == "" || infos[0].Modified.IsZero() {
 		t.Errorf("列表项要带得上时间，实际 %+v", infos[0])
-	}
-}
-
-// 没有会话时 ContinueRecent 新建一个，而不是报错
-func TestContinueRecentCreatesWhenNothingThere(t *testing.T) {
-	setHome(t)
-
-	s, err := ContinueRecent(t.TempDir())
-	if err != nil {
-		t.Fatalf("续跑失败：%v", err)
-	}
-	if s.ID() == "" || s.Path() != "" {
-		t.Errorf("该拿到一个还没落盘的新会话，实际 id=%q path=%q", s.ID(), s.Path())
 	}
 }
 
@@ -895,7 +845,7 @@ func TestCompactionSurvivesReload(t *testing.T) {
 	}
 	leaf, _ := s.Append(userMessage("第二问"))
 
-	reopened, err := ContinueRecent(cwd)
+	reopened, err := Open(s.Path())
 	if err != nil {
 		t.Fatalf("重开失败：%v", err)
 	}

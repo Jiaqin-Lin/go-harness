@@ -30,8 +30,8 @@ func (s *Session) Cwd() string { return s.cwd }
 // Path 是会话文件的路径；还没落盘时返回空串
 func (s *Session) Path() string { return s.path }
 
-// LeafID 是当前叶子。web 端不依赖它（那边每个请求都自带 parentId），
-// 命令行续跑（ContinueRecent + Messages）才用
+// LeafID 是最后写进去的那条。请求没带分支点时接在它后面（见 server/chat.go），
+// 会话视图也把它报给前端
 func (s *Session) LeafID() string { return s.leafID }
 
 // Entries 按写入顺序返回全部 entry。树是调用方按 ParentID 自己组的 ——
